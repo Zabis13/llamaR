@@ -1,0 +1,16 @@
+# R build artifacts
+*.o
+*.so
+*.dll
+src/Makevars
+src/*.o
+
+# IDE
+.Rproj.user
+.Rhistory
+.RData
+*.Rproj
+
+# Package build
+*.tar.gz
+*.Rcheck/
