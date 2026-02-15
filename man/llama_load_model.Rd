@@ -12,13 +12,17 @@ llama_load_model(path, n_gpu_layers = 0L)
 \item{n_gpu_layers}{Number of layers to offload to GPU (0 = CPU only, -1 = all)}
 }
 \value{
-An opaque model handle (ExternalPtr). Freed automatically on GC or via [llama_free_model].
+An external pointer (class \code{externalptr}) wrapping the loaded
+  model. This handle is required by \code{\link{llama_new_context}},
+  \code{\link{llama_model_info}}, and other model-level functions.
+  Freed automatically by the garbage collector or manually via
+  \code{\link{llama_free_model}}.
 }
 \description{
 Load a GGUF model file
 }
 \examples{
-\dontrun{
+if (FALSE) {
 # Load model on CPU only
 model <- llama_load_model("model.gguf")
 

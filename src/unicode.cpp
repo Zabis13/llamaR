@@ -25,13 +25,9 @@ size_t unicode_len_utf8(char src) {
     return lookup[highbits];
 }
 
-static std::string unicode_cpts_to_utf8(const std::vector<uint32_t> & cps) {
-    std::string result;
-    for (size_t i = 0; i < cps.size(); ++i) {
-        result.append(unicode_cpt_to_utf8(cps[i]));
-    }
-    return result;
-}
+// [llamaR patch] Removed unused static function unicode_cpts_to_utf8() to fix
+// -Wunused-function warning (CRAN compliance). Restore from upstream
+// llama.cpp if needed.
 
 uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
     assert(offset < utf8.size());
@@ -497,29 +493,35 @@ static std::vector<size_t> unicode_regex_split_custom_llama3(const std::string &
     return bpe_offsets;
 }
 
-// use std::wregex to split the text
+// use std::wregex to split the text (uses regex_search loop instead of
+// regex_iterator to avoid false-positive -Warray-bounds in gcc 13+)
 static std::vector<size_t> unicode_regex_split_stl(const std::wstring & wtext, const std::wstring & regex_expr, const std::vector<size_t> & offsets) {
     std::wregex expr(regex_expr, std::regex_constants::optimize | std::regex_constants::nosubs);
-    std::vector<size_t> bpe_offsets; // store the offset of each word
-    bpe_offsets.reserve(offsets.size()); // Reserve memory for the approximate size
+    std::vector<size_t> bpe_offsets;
+    bpe_offsets.reserve(offsets.size());
     size_t start = 0;
     for (auto offset : offsets) {
-        std::wcregex_iterator it(wtext.data() + start, wtext.data() + start + offset, expr);
-        std::wcregex_iterator end;
+        const wchar_t * seg_begin = wtext.data() + start;
+        const wchar_t * seg_end   = seg_begin + offset;
+        const wchar_t * cur       = seg_begin;
 
-        int64_t start_idx = 0;
-        while (it != end) {
-            std::wcmatch match = *it;
-            if (match.position() > start_idx) {
-                bpe_offsets.emplace_back(match.position() - start_idx);
+        while (cur < seg_end) {
+            std::wcmatch match;
+            if (!std::regex_search(cur, seg_end, match, expr,
+                                   std::regex_constants::match_any)) {
+                break;
             }
-            bpe_offsets.emplace_back(match.length());
-            start_idx = match.position() + match.length();
-            ++it;
+            size_t gap = (size_t)(match.prefix().length());
+            if (gap > 0) {
+                bpe_offsets.emplace_back(gap);
+            }
+            bpe_offsets.emplace_back((size_t)match.length());
+            cur += gap + (size_t)match.length();
         }
 
-        if (start_idx < (int64_t) offset) {
-            bpe_offsets.emplace_back(offset - start_idx);
+        size_t remaining = (size_t)(seg_end - cur);
+        if (remaining > 0) {
+            bpe_offsets.emplace_back(remaining);
         }
         start += offset;
     }
@@ -527,29 +529,35 @@ static std::vector<size_t> unicode_regex_split_stl(const std::wstring & wtext, c
     return bpe_offsets;
 }
 
-// use std::regex to split the text
+// use std::regex to split the text (uses regex_search loop instead of
+// regex_iterator to avoid false-positive -Warray-bounds in gcc 13+)
 static std::vector<size_t> unicode_regex_split_stl(const std::string & text, const std::string & regex_expr, const std::vector<size_t> & offsets) {
     std::regex expr(regex_expr, std::regex_constants::optimize | std::regex_constants::nosubs);
-    std::vector<size_t> bpe_offsets; // store the offset of each word
-    bpe_offsets.reserve(offsets.size()); // Reserve memory for the approximate size
+    std::vector<size_t> bpe_offsets;
+    bpe_offsets.reserve(offsets.size());
     size_t start = 0;
     for (auto offset : offsets) {
-        std::cregex_iterator it(text.data() + start, text.data() + start + offset, expr);
-        std::cregex_iterator end;
+        const char * seg_begin = text.data() + start;
+        const char * seg_end   = seg_begin + offset;
+        const char * cur       = seg_begin;
 
-        int64_t start_idx = 0;
-        while (it != end) {
-            std::cmatch match = *it;
-            if (match.position() > start_idx) {
-                bpe_offsets.emplace_back(match.position() - start_idx);
+        while (cur < seg_end) {
+            std::cmatch match;
+            if (!std::regex_search(cur, seg_end, match, expr,
+                                   std::regex_constants::match_any)) {
+                break;
             }
-            bpe_offsets.emplace_back(match.length());
-            start_idx = match.position() + match.length();
-            ++it;
+            size_t gap = (size_t)(match.prefix().length());
+            if (gap > 0) {
+                bpe_offsets.emplace_back(gap);
+            }
+            bpe_offsets.emplace_back((size_t)match.length());
+            cur += gap + (size_t)match.length();
         }
 
-        if (start_idx < (int64_t) offset) {
-            bpe_offsets.emplace_back(offset - start_idx);
+        size_t remaining = (size_t)(seg_end - cur);
+        if (remaining > 0) {
+            bpe_offsets.emplace_back(remaining);
         }
         start += offset;
     }

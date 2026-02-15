@@ -12,13 +12,13 @@ llama_detokenize(ctx, tokens)
 \item{tokens}{Integer vector of token IDs (as returned by [llama_tokenize])}
 }
 \value{
-Character string
+A character scalar containing the decoded text.
 }
 \description{
 Detokenize token IDs back to text
 }
 \examples{
-\dontrun{
+if (FALSE) {
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model)
 

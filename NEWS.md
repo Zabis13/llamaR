@@ -1,3 +1,63 @@
+# llamaR 0.2.0
+
+## Hugging Face integration
+
+### New functions
+* `llama_hf_list()` — list GGUF files in a Hugging Face repository.
+* `llama_hf_download()` — download a GGUF model with local caching.
+  Supports exact filename, glob pattern, or Ollama-style tag selection.
+* `llama_load_model_hf()` — download and load a model in one step.
+* `llama_hf_cache_dir()` — get the cache directory path.
+* `llama_hf_cache_info()` — inspect cached models.
+* `llama_hf_cache_clear()` — clear the model cache.
+
+### Dependencies
+* Added `jsonlite` and `utils` to `Imports`.
+
+---
+
+# llamaR 0.1.3
+
+## GPU and build system improvements
+
+### Vulkan GPU support on Windows
+* Added Vulkan linking support to `configure.win` and `Makevars.win.in`.
+* Windows builds now link with Vulkan when `ggmlR` is built with GPU support.
+
+### CRAN compliance
+* Added `exit()` / `_Exit()` overrides to `r_llama_compat.h` to prevent
+  process termination (redirects to `Rf_error()`).
+
+### Dependencies
+* Requires `ggmlR` >= 0.5.4.
+* Bumped minimum R version to 4.1.0 (matches `ggmlR`).
+
+### DESCRIPTION
+* Updated description to mention Vulkan GPU support via `ggmlR`.
+
+---
+
+# llamaR 0.1.2
+
+## CRAN compliance fixes
+
+### Documentation
+* Expanded all acronyms in DESCRIPTION (LLMs, GPU).
+* Added detailed `\value` tags to all exported functions describing
+  return class, structure, and meaning.
+* Replaced `\dontrun{}` with `\donttest{}` in all examples.
+
+### DESCRIPTION
+* Added Georgi Gerganov as copyright holder (`cph`) for bundled
+  'llama.cpp' code.
+
+### Packaging
+* Included `NEWS.md` in the package tarball (removed from `.Rbuildignore`).
+* Created `cran-comments.md`.
+* Cleaned up duplicate entries in `.Rbuildignore`.
+
+---
+
 # llamaR 0.1.1
 
 ## R interface — first working release

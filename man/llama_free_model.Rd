@@ -10,13 +10,14 @@ llama_free_model(model)
 \item{model}{Model handle returned by [llama_load_model]}
 }
 \value{
-Invisible NULL
+No return value, called for side effects. Releases the memory
+  associated with the model.
 }
 \description{
 Free a loaded model
 }
 \examples{
-\dontrun{
+if (FALSE) {
 model <- llama_load_model("model.gguf")
 # ... use model ...
 llama_free_model(model)

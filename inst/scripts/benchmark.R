@@ -4,7 +4,8 @@
 library(llamaR)
 
 # Configuration
-MODEL_PATH <- "/mnt/Data2/DS_projects/llm_models/meta-llama-3.2-1B-Instruct-ft-sarcasm.Q4_K_M.gguf"
+#MODEL_PATH <- "/mnt/Data2/DS_projects/llm_models/meta-llama-3.2-1B-Instruct-ft-sarcasm.Q4_K_M.gguf"
+MODEL_PATH <- "/mnt/Data2/DS_projects/llm_models/Qwen3-14B-Q8_0.gguf"
 PROMPT <- "Explain quantum computing in simple terms:"
 MAX_TOKENS <- 50L
 N_RUNS <- 3

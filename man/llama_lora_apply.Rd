@@ -14,14 +14,15 @@ llama_lora_apply(ctx, lora, scale = 1)
 \item{scale}{Scaling factor for the adapter (1.0 = full effect, 0.5 = half effect)}
 }
 \value{
-Invisible NULL
+No return value, called for side effects. Activates the LoRA adapter
+  for the given context.
 }
 \description{
 Activates a loaded LoRA adapter for the given context.
 Multiple LoRA adapters can be applied simultaneously.
 }
 \examples{
-\dontrun{
+if (FALSE) {
 model <- llama_load_model("base-model.gguf")
 lora <- llama_lora_load(model, "adapter.gguf")
 ctx <- llama_new_context(model)

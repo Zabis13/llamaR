@@ -11,7 +11,17 @@ llama_generate(
   temp = 0.8,
   top_k = 50L,
   top_p = 0.9,
-  seed = 42L
+  seed = 42L,
+  min_p = 0,
+  typical_p = 1,
+  repeat_penalty = 1,
+  repeat_last_n = 64L,
+  frequency_penalty = 0,
+  presence_penalty = 0,
+  mirostat = 0L,
+  mirostat_tau = 5,
+  mirostat_eta = 0.1,
+  grammar = NULL
 )
 }
 \arguments{
@@ -28,16 +38,37 @@ llama_generate(
 \item{top_p}{Top-P (nucleus) filtering (1.0 = disabled)}
 
 \item{seed}{Random seed for sampling}
+
+\item{min_p}{Min-P filtering threshold (0.0 = disabled)}
+
+\item{typical_p}{Locally typical sampling threshold (1.0 = disabled)}
+
+\item{repeat_penalty}{Repetition penalty (1.0 = disabled)}
+
+\item{repeat_last_n}{Number of last tokens to penalize (0 = disabled, -1 = context size)}
+
+\item{frequency_penalty}{Frequency penalty (0.0 = disabled)}
+
+\item{presence_penalty}{Presence penalty (0.0 = disabled)}
+
+\item{mirostat}{Mirostat sampling mode (0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0)}
+
+\item{mirostat_tau}{Mirostat target entropy (tau parameter)}
+
+\item{mirostat_eta}{Mirostat learning rate (eta parameter)}
+
+\item{grammar}{GBNF grammar string for constrained generation (NULL = disabled)}
 }
 \value{
-Character string with generated text
+A character scalar containing the generated text (excluding the
+  original prompt).
 }
 \description{
 Tokenizes the prompt, runs the full autoregressive decode loop with sampling,
 and returns the generated text (excluding the original prompt).
 }
 \examples{
-\dontrun{
+if (FALSE) {
 model <- llama_load_model("model.gguf", n_gpu_layers = -1L)
 ctx <- llama_new_context(model, n_ctx = 2048L)
 
@@ -52,5 +83,13 @@ result <- llama_generate(ctx, "The answer is", temp = 0)
 result <- llama_generate(ctx, "Write a poem about R:",
                          max_new_tokens = 100L,
                          temp = 1.0, top_p = 0.95)
+
+# With repetition penalty
+result <- llama_generate(ctx, "List items:",
+                         repeat_penalty = 1.1, repeat_last_n = 64L)
+
+# JSON output with grammar
+result <- llama_generate(ctx, "Output JSON:",
+                         grammar = 'root ::= "{" "}" ')
 }
 }

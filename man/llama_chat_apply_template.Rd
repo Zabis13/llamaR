@@ -19,14 +19,15 @@ Roles are typically "system", "user", "assistant".}
 \item{add_generation_prompt}{Whether to add the assistant prompt prefix at the end}
 }
 \value{
-Formatted prompt string ready for generation
+A character scalar containing the formatted prompt string, ready
+  to be passed to \code{\link{llama_generate}}.
 }
 \description{
 Formats a conversation using the specified chat template.
 This is essential for instruct/chat models to work correctly.
 }
 \examples{
-\dontrun{
+if (FALSE) {
 model <- llama_load_model("llama-3.2-instruct.gguf")
 tmpl <- llama_chat_template(model)
 

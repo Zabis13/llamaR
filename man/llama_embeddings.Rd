@@ -12,14 +12,15 @@ llama_embeddings(ctx, text)
 \item{text}{Character string to embed}
 }
 \value{
-Numeric vector of length `n_embd`
+A numeric vector of length \code{n_embd} (the model's embedding
+  dimension) containing the hidden-state representation of the input text.
 }
 \description{
 Runs the model in embeddings mode and returns the hidden-state vector
 of the last token. Note: meaningful only for models that support embeddings.
 }
 \examples{
-\dontrun{
+if (FALSE) {
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model)
 

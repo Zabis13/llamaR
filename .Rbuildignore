@@ -9,11 +9,8 @@
 ^CRAN-SUBMISSION$
 ^\.claude$
 ^TODO\.md$
-^NEWS\.md$
 ^src/.*\.o$
 ^src/models/.*\.o$
 ^src/Makevars$
 ^\.\.Rcheck$
 ^.*\.Rcheck$
-^\.RData$
-^\.Rhistory$

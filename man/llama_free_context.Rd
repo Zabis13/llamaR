@@ -10,13 +10,14 @@ llama_free_context(ctx)
 \item{ctx}{Context handle returned by [llama_new_context]}
 }
 \value{
-Invisible NULL
+No return value, called for side effects. Releases the memory
+  associated with the inference context.
 }
 \description{
 Free an inference context
 }
 \examples{
-\dontrun{
+if (FALSE) {
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model)
 # ... use context ...

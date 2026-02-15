@@ -1,25 +1,29 @@
 Package: llamaR
 Type: Package
-Title: 'llama.cpp' Interface for Large Language Models in R
-Version: 0.1.1
-Authors@R:
-    person("Yuri", "Baramykov", email = "lbsbmsu@mail.ru", role = c("aut", "cre"))
-Author: Yuri Baramykov
-Maintainer: Yuri Baramykov <lbsbmsu@mail.ru>
-Description: Provides R bindings to 'llama.cpp' for running large language models
-    (LLMs) locally. Supports model loading, text generation, tokenization, and
-    embeddings. Built on top of 'ggmlR' for efficient tensor operations with
-    optional GPU acceleration.
+Title: Interface for Large Language Models in R
+Version: 0.2.0
+Authors@R: c(
+    person("Yuri", "Baramykov", email = "lbsbmsu@mail.ru", role = c("aut", "cre")),
+    person("Georgi", "Gerganov", role = "cph",
+           comment = "Author of the 'llama.cpp' library included in src/"))
+Description: Provides 'R' bindings to 'llama.cpp' for running Large Language Models
+    ('LLMs') locally with optional 'Vulkan' GPU acceleration via 'ggmlR'. Supports
+    model loading, text generation, tokenization, embeddings, chat templates, and
+    'LoRA' adapters. Built on top of 'ggmlR' for efficient tensor operations.
 License: MIT + file LICENSE
 URL: https://github.com/Zabis13/llamaR
 BugReports: https://github.com/Zabis13/llamaR/issues
 Encoding: UTF-8
 Depends:
-    R (>= 4.0.0),
+    R (>= 4.1.0),
     ggmlR
 LinkingTo: ggmlR
 SystemRequirements: C++17, GNU make
+Imports:
+    jsonlite,
+    utils
 Suggests:
     testthat (>= 3.0.0)
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3
+Remotes: Zabis13/ggmlR

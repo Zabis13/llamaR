@@ -14,13 +14,13 @@ llama_tokenize(ctx, text, add_special = TRUE)
 \item{add_special}{Whether to add special tokens (BOS/EOS) as configured by the model}
 }
 \value{
-Integer vector of token IDs
+An integer vector of token IDs as used by the model's vocabulary.
 }
 \description{
 Tokenize text into token IDs
 }
 \examples{
-\dontrun{
+if (FALSE) {
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model)
 

@@ -7,7 +7,8 @@
 llama_get_verbosity()
 }
 \value{
-Integer verbosity level (0-3)
+An integer scalar indicating the current verbosity level
+  (0 = silent, 1 = errors only, 2 = normal, 3 = verbose).
 }
 \description{
 Get current verbosity level

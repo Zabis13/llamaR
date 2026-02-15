@@ -7,7 +7,8 @@
 llama_supports_gpu()
 }
 \value{
-Logical scalar
+A logical scalar: \code{TRUE} if at least one GPU backend
+  (e.g. Vulkan) is available, \code{FALSE} otherwise.
 }
 \description{
 Returns `TRUE` if at least one GPU backend (e.g. Vulkan) was detected at

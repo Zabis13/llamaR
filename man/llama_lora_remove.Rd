@@ -12,8 +12,14 @@ llama_lora_remove(ctx, lora)
 \item{lora}{LoRA adapter handle to remove}
 }
 \value{
-Integer: 0 on success, -1 if adapter was not applied
+An integer scalar: 0 on success, -1 if the adapter was not applied
+  to this context.
 }
 \description{
 Deactivates a specific LoRA adapter from the context.
+}
+\examples{
+if (FALSE) {
+llama_lora_remove(ctx, lora)
+}
 }

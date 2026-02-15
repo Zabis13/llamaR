@@ -14,13 +14,16 @@ llama_new_context(model, n_ctx = 2048L, n_threads = 4L)
 \item{n_threads}{Number of CPU threads to use}
 }
 \value{
-An opaque context handle (ExternalPtr). Freed automatically on GC or via [llama_free_context].
+An external pointer (class \code{externalptr}) wrapping the inference
+  context. This handle is required by generation, tokenization, and embedding
+  functions. Freed automatically by the garbage collector or manually via
+  \code{\link{llama_free_context}}.
 }
 \description{
 Create an inference context
 }
 \examples{
-\dontrun{
+if (FALSE) {
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model, n_ctx = 4096L, n_threads = 8L)
 # ... use context for generation ...

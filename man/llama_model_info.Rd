@@ -17,16 +17,22 @@ A named list with fields:
   - `n_layer`: number of layers
   - `n_head`: number of attention heads
   - `desc`: human-readable model description string
+  - `size`: model size in bytes
+  - `n_params`: number of parameters
+  - `has_encoder`: whether the model has an encoder
+  - `has_decoder`: whether the model has a decoder
+  - `is_recurrent`: whether the model is recurrent (e.g. Mamba)
 }
 \description{
 Get model metadata
 }
 \examples{
-\dontrun{
+if (FALSE) {
 model <- llama_load_model("model.gguf")
 info <- llama_model_info(model)
 cat("Model:", info$desc, "\n")
 cat("Layers:", info$n_layer, "\n")
 cat("Context:", info$n_ctx_train, "\n")
+cat("Size:", info$size / 1e9, "GB\n")
 }
 }

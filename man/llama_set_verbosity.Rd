@@ -14,7 +14,8 @@ llama_set_verbosity(level)
 - 3: Verbose (all debug messages)}
 }
 \value{
-Invisible NULL
+No return value, called for side effects. Sets the global
+  verbosity level used by the underlying 'llama.cpp' library.
 }
 \description{
 Controls how much diagnostic output is printed during model loading and inference.

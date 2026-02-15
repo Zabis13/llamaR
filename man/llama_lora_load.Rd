@@ -12,14 +12,16 @@ llama_lora_load(model, path)
 \item{path}{Path to the LoRA adapter file (.gguf or .bin)}
 }
 \value{
-LoRA adapter handle (ExternalPtr)
+An external pointer (class \code{externalptr}) wrapping the loaded
+  LoRA (Low-Rank Adaptation) adapter. Pass this handle to
+  \code{\link{llama_lora_apply}} to activate the adapter.
 }
 \description{
 Loads a LoRA (Low-Rank Adaptation) adapter file that can be applied
 to modify the model's behavior without changing the base weights.
 }
 \examples{
-\dontrun{
+if (FALSE) {
 model <- llama_load_model("base-model.gguf")
 lora <- llama_lora_load(model, "fine-tuned-adapter.gguf")
 

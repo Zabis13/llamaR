@@ -214,24 +214,29 @@ static void llama_token_data_array_partial_sort_inplace(llama_token_data_array *
     cur_p->sorted = true;
 }
 
+// [llamaR patch] Moved probs_iterator out of llama_sample_dist() into an
+// anonymous namespace to avoid -Wunused-local-typedefs from gcc (CRAN
+// compliance). The typedefs are required by std::discrete_distribution
+// (InputIt concept) but gcc warns about them when defined inside a function.
+namespace {
+struct probs_iterator {
+    using iterator_category = std::input_iterator_tag;
+    using value_type        = float;
+    using pointer           = float *;
+    using reference         = float &;
+    using difference_type   = ptrdiff_t;
+
+    const llama_token_data * data;
+
+    bool operator==(const probs_iterator & other) const { return data == other.data; }
+    bool operator!=(const probs_iterator & other) const { return data != other.data; }
+    const float & operator*() const { return data->p; }
+    probs_iterator & operator++() { ++data; return *this; }
+    probs_iterator operator++(int) { probs_iterator tmp = *this; ++data; return tmp; }
+};
+} // anonymous namespace
+
 static int llama_sample_dist(llama_token_data_array * cur_p, std::mt19937 & rng) {
-    // iterator for the probabilities
-    struct probs_iterator {
-        using iterator_category = std::input_iterator_tag;
-        using value_type        = float;
-        using pointer           = float *;
-        using reference         = float &;
-        using difference_type   = ptrdiff_t;
-
-        const llama_token_data * data;
-
-        bool operator==(const probs_iterator & other) const { return data == other.data; }
-        bool operator!=(const probs_iterator & other) const { return data != other.data; }
-        const float & operator*() const { return data->p; }
-        probs_iterator & operator++() { ++data; return *this; }
-        probs_iterator operator++(int) { probs_iterator tmp = *this; ++data; return tmp; }
-    };
-
     std::discrete_distribution<int> dist(probs_iterator{cur_p->data}, probs_iterator{cur_p->data + cur_p->size});
 
     return dist(rng);

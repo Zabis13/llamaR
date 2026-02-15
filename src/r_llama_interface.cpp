@@ -242,7 +242,12 @@ extern "C" SEXP r_llama_detokenize(SEXP r_ctx, SEXP r_tokens) {
 
 extern "C" SEXP r_llama_generate(SEXP r_ctx, SEXP r_prompt,
                                   SEXP r_max_new_tokens, SEXP r_temp,
-                                  SEXP r_top_k, SEXP r_top_p, SEXP r_seed) {
+                                  SEXP r_top_k, SEXP r_top_p, SEXP r_seed,
+                                  SEXP r_min_p, SEXP r_typical_p,
+                                  SEXP r_repeat_penalty, SEXP r_repeat_last_n,
+                                  SEXP r_frequency_penalty, SEXP r_presence_penalty,
+                                  SEXP r_mirostat, SEXP r_mirostat_tau,
+                                  SEXP r_mirostat_eta, SEXP r_grammar) {
     llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
     if (!ctx) Rf_error("llamaR: invalid context pointer");
 
@@ -255,6 +260,16 @@ extern "C" SEXP r_llama_generate(SEXP r_ctx, SEXP r_prompt,
     int          top_k          = INTEGER(r_top_k)[0];
     float        top_p          = (float) REAL(r_top_p)[0];
     uint32_t     seed           = (uint32_t) INTEGER(r_seed)[0];
+    float        min_p          = (float) REAL(r_min_p)[0];
+    float        typical_p      = (float) REAL(r_typical_p)[0];
+    float        repeat_penalty = (float) REAL(r_repeat_penalty)[0];
+    int          repeat_last_n  = INTEGER(r_repeat_last_n)[0];
+    float        freq_penalty   = (float) REAL(r_frequency_penalty)[0];
+    float        pres_penalty   = (float) REAL(r_presence_penalty)[0];
+    int          mirostat       = INTEGER(r_mirostat)[0];
+    float        mirostat_tau   = (float) REAL(r_mirostat_tau)[0];
+    float        mirostat_eta   = (float) REAL(r_mirostat_eta)[0];
+    const char * grammar        = Rf_isNull(r_grammar) ? NULL : CHAR(STRING_ELT(r_grammar, 0));
 
     int prompt_len = (int) strlen(prompt);
 
@@ -275,17 +290,42 @@ extern "C" SEXP r_llama_generate(SEXP r_ctx, SEXP r_prompt,
     auto sparams = llama_sampler_chain_default_params();
     llama_sampler * smpl = llama_sampler_chain_init(sparams);
 
-    if (top_k > 0)
-        llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k));
-    if (top_p < 1.0f)
-        llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p, 1));
-    if (temp > 0.0f)
-        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp));
+    // Grammar (must be added first to constrain logits before other samplers)
+    if (grammar && strlen(grammar) > 0) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_grammar(vocab, grammar, "root"));
+    }
 
-    if (temp > 0.0f)
-        llama_sampler_chain_add(smpl, llama_sampler_init_dist(seed));
-    else
-        llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+    // Penalties (applied before sampling)
+    if (repeat_penalty != 1.0f || freq_penalty != 0.0f || pres_penalty != 0.0f) {
+        llama_sampler_chain_add(smpl,
+            llama_sampler_init_penalties(repeat_last_n, repeat_penalty, freq_penalty, pres_penalty));
+    }
+
+    if (mirostat == 0) {
+        // Standard sampling chain
+        if (top_k > 0)
+            llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k));
+        if (min_p > 0.0f)
+            llama_sampler_chain_add(smpl, llama_sampler_init_min_p(min_p, 1));
+        if (typical_p < 1.0f)
+            llama_sampler_chain_add(smpl, llama_sampler_init_typical(typical_p, 1));
+        if (top_p < 1.0f)
+            llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p, 1));
+        if (temp > 0.0f)
+            llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp));
+
+        if (temp > 0.0f)
+            llama_sampler_chain_add(smpl, llama_sampler_init_dist(seed));
+        else
+            llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+    } else if (mirostat == 1) {
+        int n_vocab_size = llama_vocab_n_tokens(vocab);
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp > 0.0f ? temp : 0.8f));
+        llama_sampler_chain_add(smpl, llama_sampler_init_mirostat(n_vocab_size, seed, mirostat_tau, mirostat_eta, 100));
+    } else if (mirostat == 2) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp > 0.0f ? temp : 0.8f));
+        llama_sampler_chain_add(smpl, llama_sampler_init_mirostat_v2(seed, mirostat_tau, mirostat_eta));
+    }
 
     // --- clear KV cache and encode prompt ---
     llama_memory_clear(llama_get_memory(ctx), true);
@@ -513,29 +553,426 @@ extern "C" SEXP r_llama_lora_clear(SEXP r_ctx) {
 }
 
 // ============================================================
+// Extended Model Info
+// ============================================================
+
+extern "C" SEXP r_llama_model_size(SEXP r_model) {
+    llama_model * model = (llama_model *) R_ExternalPtrAddr(r_model);
+    if (!model) Rf_error("llamaR: invalid model pointer");
+    return Rf_ScalarReal((double) llama_model_size(model));
+}
+
+extern "C" SEXP r_llama_model_n_params(SEXP r_model) {
+    llama_model * model = (llama_model *) R_ExternalPtrAddr(r_model);
+    if (!model) Rf_error("llamaR: invalid model pointer");
+    return Rf_ScalarReal((double) llama_model_n_params(model));
+}
+
+extern "C" SEXP r_llama_model_has_encoder(SEXP r_model) {
+    llama_model * model = (llama_model *) R_ExternalPtrAddr(r_model);
+    if (!model) Rf_error("llamaR: invalid model pointer");
+    return Rf_ScalarLogical(llama_model_has_encoder(model) ? TRUE : FALSE);
+}
+
+extern "C" SEXP r_llama_model_has_decoder(SEXP r_model) {
+    llama_model * model = (llama_model *) R_ExternalPtrAddr(r_model);
+    if (!model) Rf_error("llamaR: invalid model pointer");
+    return Rf_ScalarLogical(llama_model_has_decoder(model) ? TRUE : FALSE);
+}
+
+extern "C" SEXP r_llama_model_is_recurrent(SEXP r_model) {
+    llama_model * model = (llama_model *) R_ExternalPtrAddr(r_model);
+    if (!model) Rf_error("llamaR: invalid model pointer");
+    return Rf_ScalarLogical(llama_model_is_recurrent(model) ? TRUE : FALSE);
+}
+
+extern "C" SEXP r_llama_model_meta(SEXP r_model) {
+    llama_model * model = (llama_model *) R_ExternalPtrAddr(r_model);
+    if (!model) Rf_error("llamaR: invalid model pointer");
+
+    int32_t count = llama_model_meta_count(model);
+
+    SEXP names  = PROTECT(Rf_allocVector(STRSXP, count));
+    SEXP values = PROTECT(Rf_allocVector(STRSXP, count));
+
+    char buf[512];
+    for (int32_t i = 0; i < count; i++) {
+        int32_t klen = llama_model_meta_key_by_index(model, i, buf, sizeof(buf));
+        if (klen > 0) {
+            buf[klen] = '\0';
+            SET_STRING_ELT(names, i, Rf_mkChar(buf));
+        } else {
+            SET_STRING_ELT(names, i, Rf_mkChar(""));
+        }
+
+        int32_t vlen = llama_model_meta_val_str_by_index(model, i, buf, sizeof(buf));
+        if (vlen > 0) {
+            buf[(vlen < (int32_t)sizeof(buf) - 1) ? vlen : (int32_t)sizeof(buf) - 1] = '\0';
+            SET_STRING_ELT(values, i, Rf_mkChar(buf));
+        } else {
+            SET_STRING_ELT(values, i, Rf_mkChar(""));
+        }
+    }
+
+    Rf_setAttrib(values, R_NamesSymbol, names);
+    UNPROTECT(2);
+    return values;
+}
+
+extern "C" SEXP r_llama_model_meta_val(SEXP r_model, SEXP r_key) {
+    llama_model * model = (llama_model *) R_ExternalPtrAddr(r_model);
+    if (!model) Rf_error("llamaR: invalid model pointer");
+
+    const char * key = CHAR(STRING_ELT(r_key, 0));
+    char buf[512];
+    int32_t len = llama_model_meta_val_str(model, key, buf, sizeof(buf));
+    if (len < 0) return R_NilValue;
+    buf[(len < (int32_t)sizeof(buf) - 1) ? len : (int32_t)sizeof(buf) - 1] = '\0';
+    return Rf_mkString(buf);
+}
+
+// ============================================================
+// Vocabulary Info
+// ============================================================
+
+extern "C" SEXP r_llama_vocab_info(SEXP r_model) {
+    llama_model * model = (llama_model *) R_ExternalPtrAddr(r_model);
+    if (!model) Rf_error("llamaR: invalid model pointer");
+
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    SEXP result = PROTECT(Rf_allocVector(INTSXP, 11));
+    INTEGER(result)[0]  = llama_vocab_bos(vocab);
+    INTEGER(result)[1]  = llama_vocab_eos(vocab);
+    INTEGER(result)[2]  = llama_vocab_eot(vocab);
+    INTEGER(result)[3]  = llama_vocab_sep(vocab);
+    INTEGER(result)[4]  = llama_vocab_nl(vocab);
+    INTEGER(result)[5]  = llama_vocab_pad(vocab);
+    INTEGER(result)[6]  = llama_vocab_fim_pre(vocab);
+    INTEGER(result)[7]  = llama_vocab_fim_suf(vocab);
+    INTEGER(result)[8]  = llama_vocab_fim_mid(vocab);
+    INTEGER(result)[9]  = llama_vocab_fim_rep(vocab);
+    INTEGER(result)[10] = llama_vocab_fim_sep(vocab);
+
+    SEXP names = PROTECT(Rf_allocVector(STRSXP, 11));
+    SET_STRING_ELT(names, 0,  Rf_mkChar("bos"));
+    SET_STRING_ELT(names, 1,  Rf_mkChar("eos"));
+    SET_STRING_ELT(names, 2,  Rf_mkChar("eot"));
+    SET_STRING_ELT(names, 3,  Rf_mkChar("sep"));
+    SET_STRING_ELT(names, 4,  Rf_mkChar("nl"));
+    SET_STRING_ELT(names, 5,  Rf_mkChar("pad"));
+    SET_STRING_ELT(names, 6,  Rf_mkChar("fim_pre"));
+    SET_STRING_ELT(names, 7,  Rf_mkChar("fim_suf"));
+    SET_STRING_ELT(names, 8,  Rf_mkChar("fim_mid"));
+    SET_STRING_ELT(names, 9,  Rf_mkChar("fim_rep"));
+    SET_STRING_ELT(names, 10, Rf_mkChar("fim_sep"));
+    Rf_setAttrib(result, R_NamesSymbol, names);
+
+    UNPROTECT(2);
+    return result;
+}
+
+// ============================================================
+// Context Config
+// ============================================================
+
+extern "C" SEXP r_llama_set_n_threads(SEXP r_ctx, SEXP r_n_threads, SEXP r_n_threads_batch) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    int32_t n_threads       = INTEGER(r_n_threads)[0];
+    int32_t n_threads_batch = INTEGER(r_n_threads_batch)[0];
+    llama_set_n_threads(ctx, n_threads, n_threads_batch);
+    return R_NilValue;
+}
+
+extern "C" SEXP r_llama_set_causal_attn(SEXP r_ctx, SEXP r_causal) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    bool causal = LOGICAL(r_causal)[0] != 0;
+    llama_set_causal_attn(ctx, causal);
+    return R_NilValue;
+}
+
+extern "C" SEXP r_llama_n_ctx(SEXP r_ctx) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+    return Rf_ScalarInteger((int) llama_n_ctx(ctx));
+}
+
+// ============================================================
+// Memory / KV Cache
+// ============================================================
+
+extern "C" SEXP r_llama_memory_clear(SEXP r_ctx) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+    llama_memory_clear(llama_get_memory(ctx), true);
+    return R_NilValue;
+}
+
+extern "C" SEXP r_llama_memory_seq_rm(SEXP r_ctx, SEXP r_seq_id, SEXP r_p0, SEXP r_p1) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    llama_seq_id seq_id = INTEGER(r_seq_id)[0];
+    llama_pos p0 = INTEGER(r_p0)[0];
+    llama_pos p1 = INTEGER(r_p1)[0];
+
+    bool ok = llama_memory_seq_rm(llama_get_memory(ctx), seq_id, p0, p1);
+    return Rf_ScalarLogical(ok ? TRUE : FALSE);
+}
+
+extern "C" SEXP r_llama_memory_seq_cp(SEXP r_ctx, SEXP r_seq_src, SEXP r_seq_dst, SEXP r_p0, SEXP r_p1) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    llama_memory_seq_cp(llama_get_memory(ctx),
+                        INTEGER(r_seq_src)[0], INTEGER(r_seq_dst)[0],
+                        INTEGER(r_p0)[0], INTEGER(r_p1)[0]);
+    return R_NilValue;
+}
+
+extern "C" SEXP r_llama_memory_seq_keep(SEXP r_ctx, SEXP r_seq_id) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    llama_memory_seq_keep(llama_get_memory(ctx), INTEGER(r_seq_id)[0]);
+    return R_NilValue;
+}
+
+extern "C" SEXP r_llama_memory_seq_add(SEXP r_ctx, SEXP r_seq_id, SEXP r_p0, SEXP r_p1, SEXP r_delta) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    llama_memory_seq_add(llama_get_memory(ctx),
+                         INTEGER(r_seq_id)[0],
+                         INTEGER(r_p0)[0], INTEGER(r_p1)[0],
+                         INTEGER(r_delta)[0]);
+    return R_NilValue;
+}
+
+extern "C" SEXP r_llama_memory_seq_pos_range(SEXP r_ctx, SEXP r_seq_id) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    llama_seq_id seq_id = INTEGER(r_seq_id)[0];
+    llama_memory_t mem = llama_get_memory(ctx);
+
+    SEXP result = PROTECT(Rf_allocVector(INTSXP, 2));
+    INTEGER(result)[0] = llama_memory_seq_pos_min(mem, seq_id);
+    INTEGER(result)[1] = llama_memory_seq_pos_max(mem, seq_id);
+
+    SEXP names = PROTECT(Rf_allocVector(STRSXP, 2));
+    SET_STRING_ELT(names, 0, Rf_mkChar("min"));
+    SET_STRING_ELT(names, 1, Rf_mkChar("max"));
+    Rf_setAttrib(result, R_NamesSymbol, names);
+
+    UNPROTECT(2);
+    return result;
+}
+
+extern "C" SEXP r_llama_memory_can_shift(SEXP r_ctx) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+    return Rf_ScalarLogical(llama_memory_can_shift(llama_get_memory(ctx)) ? TRUE : FALSE);
+}
+
+// ============================================================
+// State Save / Load
+// ============================================================
+
+extern "C" SEXP r_llama_state_save(SEXP r_ctx, SEXP r_path) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    const char * path = CHAR(STRING_ELT(r_path, 0));
+    bool ok = llama_state_save_file(ctx, path, NULL, 0);
+    if (!ok) Rf_error("llamaR: failed to save state to '%s'", path);
+    return Rf_ScalarLogical(TRUE);
+}
+
+extern "C" SEXP r_llama_state_load(SEXP r_ctx, SEXP r_path) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    const char * path = CHAR(STRING_ELT(r_path, 0));
+    size_t n_token_count = 0;
+    bool ok = llama_state_load_file(ctx, path, NULL, 0, &n_token_count);
+    if (!ok) Rf_error("llamaR: failed to load state from '%s'", path);
+    return Rf_ScalarLogical(TRUE);
+}
+
+// ============================================================
+// Logits
+// ============================================================
+
+extern "C" SEXP r_llama_get_logits(SEXP r_ctx) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    int n_vocab = llama_vocab_n_tokens(vocab);
+
+    float * logits = llama_get_logits(ctx);
+    if (!logits) Rf_error("llamaR: logits are NULL (no decode has been performed)");
+
+    SEXP result = PROTECT(Rf_allocVector(REALSXP, n_vocab));
+    for (int i = 0; i < n_vocab; i++) {
+        REAL(result)[i] = (double) logits[i];
+    }
+    UNPROTECT(1);
+    return result;
+}
+
+// ============================================================
+// Performance
+// ============================================================
+
+extern "C" SEXP r_llama_perf_context(SEXP r_ctx) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    struct llama_perf_context_data perf = llama_perf_context(ctx);
+
+    SEXP result = PROTECT(Rf_allocVector(VECSXP, 6));
+    SET_VECTOR_ELT(result, 0, Rf_ScalarReal(perf.t_load_ms));
+    SET_VECTOR_ELT(result, 1, Rf_ScalarReal(perf.t_p_eval_ms));
+    SET_VECTOR_ELT(result, 2, Rf_ScalarReal(perf.t_eval_ms));
+    SET_VECTOR_ELT(result, 3, Rf_ScalarInteger(perf.n_p_eval));
+    SET_VECTOR_ELT(result, 4, Rf_ScalarInteger(perf.n_eval));
+    SET_VECTOR_ELT(result, 5, Rf_ScalarInteger(perf.n_reused));
+
+    SEXP names = PROTECT(Rf_allocVector(STRSXP, 6));
+    SET_STRING_ELT(names, 0, Rf_mkChar("t_load_ms"));
+    SET_STRING_ELT(names, 1, Rf_mkChar("t_p_eval_ms"));
+    SET_STRING_ELT(names, 2, Rf_mkChar("t_eval_ms"));
+    SET_STRING_ELT(names, 3, Rf_mkChar("n_p_eval"));
+    SET_STRING_ELT(names, 4, Rf_mkChar("n_eval"));
+    SET_STRING_ELT(names, 5, Rf_mkChar("n_reused"));
+    Rf_setAttrib(result, R_NamesSymbol, names);
+
+    UNPROTECT(2);
+    return result;
+}
+
+extern "C" SEXP r_llama_perf_context_reset(SEXP r_ctx) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+    llama_perf_context_reset(ctx);
+    return R_NilValue;
+}
+
+extern "C" SEXP r_llama_system_info(void) {
+    ensure_backend_init();
+    return Rf_mkString(llama_print_system_info());
+}
+
+// ============================================================
+// Hardware Support
+// ============================================================
+
+extern "C" SEXP r_llama_supports_mmap(void) {
+    return Rf_ScalarLogical(llama_supports_mmap() ? TRUE : FALSE);
+}
+
+extern "C" SEXP r_llama_supports_mlock(void) {
+    return Rf_ScalarLogical(llama_supports_mlock() ? TRUE : FALSE);
+}
+
+extern "C" SEXP r_llama_max_devices(void) {
+    return Rf_ScalarInteger((int) llama_max_devices());
+}
+
+// ============================================================
+// Chat: builtin templates
+// ============================================================
+
+extern "C" SEXP r_llama_chat_builtin_templates(void) {
+    // First call to get count
+    int32_t count = llama_chat_builtin_templates(NULL, 0);
+    if (count <= 0) {
+        return Rf_allocVector(STRSXP, 0);
+    }
+
+    std::vector<const char *> names(count);
+    llama_chat_builtin_templates(names.data(), count);
+
+    SEXP result = PROTECT(Rf_allocVector(STRSXP, count));
+    for (int32_t i = 0; i < count; i++) {
+        SET_STRING_ELT(result, i, Rf_mkChar(names[i] ? names[i] : ""));
+    }
+    UNPROTECT(1);
+    return result;
+}
+
+// ============================================================
 // Registration
 // ============================================================
 
 static const R_CallMethodDef CallEntries[] = {
-    {"r_llama_version",             (DL_FUNC) &r_llama_version,             0},
-    {"r_llama_supports_gpu",        (DL_FUNC) &r_llama_supports_gpu,        0},
-    {"r_llama_set_verbosity",       (DL_FUNC) &r_llama_set_verbosity,       1},
-    {"r_llama_get_verbosity",       (DL_FUNC) &r_llama_get_verbosity,       0},
-    {"r_llama_load_model",          (DL_FUNC) &r_llama_load_model,          2},
-    {"r_llama_free_model",          (DL_FUNC) &r_llama_free_model,          1},
-    {"r_llama_model_info",          (DL_FUNC) &r_llama_model_info,          1},
-    {"r_llama_new_context",         (DL_FUNC) &r_llama_new_context,         3},
-    {"r_llama_free_context",        (DL_FUNC) &r_llama_free_context,        1},
-    {"r_llama_tokenize",            (DL_FUNC) &r_llama_tokenize,            3},
-    {"r_llama_detokenize",          (DL_FUNC) &r_llama_detokenize,          2},
-    {"r_llama_generate",            (DL_FUNC) &r_llama_generate,            7},
-    {"r_llama_embeddings",          (DL_FUNC) &r_llama_embeddings,          2},
-    {"r_llama_chat_template",       (DL_FUNC) &r_llama_chat_template,       2},
-    {"r_llama_chat_apply_template", (DL_FUNC) &r_llama_chat_apply_template, 3},
-    {"r_llama_lora_load",           (DL_FUNC) &r_llama_lora_load,           2},
-    {"r_llama_lora_apply",          (DL_FUNC) &r_llama_lora_apply,          3},
-    {"r_llama_lora_remove",         (DL_FUNC) &r_llama_lora_remove,         2},
-    {"r_llama_lora_clear",          (DL_FUNC) &r_llama_lora_clear,          1},
+    // Version & hardware
+    {"r_llama_version",               (DL_FUNC) &r_llama_version,               0},
+    {"r_llama_supports_gpu",          (DL_FUNC) &r_llama_supports_gpu,          0},
+    {"r_llama_supports_mmap",         (DL_FUNC) &r_llama_supports_mmap,         0},
+    {"r_llama_supports_mlock",        (DL_FUNC) &r_llama_supports_mlock,        0},
+    {"r_llama_max_devices",           (DL_FUNC) &r_llama_max_devices,           0},
+    {"r_llama_system_info",           (DL_FUNC) &r_llama_system_info,           0},
+    // Verbosity
+    {"r_llama_set_verbosity",         (DL_FUNC) &r_llama_set_verbosity,         1},
+    {"r_llama_get_verbosity",         (DL_FUNC) &r_llama_get_verbosity,         0},
+    // Model
+    {"r_llama_load_model",            (DL_FUNC) &r_llama_load_model,            2},
+    {"r_llama_free_model",            (DL_FUNC) &r_llama_free_model,            1},
+    {"r_llama_model_info",            (DL_FUNC) &r_llama_model_info,            1},
+    {"r_llama_model_size",            (DL_FUNC) &r_llama_model_size,            1},
+    {"r_llama_model_n_params",        (DL_FUNC) &r_llama_model_n_params,        1},
+    {"r_llama_model_has_encoder",     (DL_FUNC) &r_llama_model_has_encoder,     1},
+    {"r_llama_model_has_decoder",     (DL_FUNC) &r_llama_model_has_decoder,     1},
+    {"r_llama_model_is_recurrent",    (DL_FUNC) &r_llama_model_is_recurrent,    1},
+    {"r_llama_model_meta",            (DL_FUNC) &r_llama_model_meta,            1},
+    {"r_llama_model_meta_val",        (DL_FUNC) &r_llama_model_meta_val,        2},
+    // Vocabulary
+    {"r_llama_vocab_info",            (DL_FUNC) &r_llama_vocab_info,            1},
+    // Context
+    {"r_llama_new_context",           (DL_FUNC) &r_llama_new_context,           3},
+    {"r_llama_free_context",          (DL_FUNC) &r_llama_free_context,          1},
+    {"r_llama_n_ctx",                 (DL_FUNC) &r_llama_n_ctx,                 1},
+    {"r_llama_set_n_threads",         (DL_FUNC) &r_llama_set_n_threads,         3},
+    {"r_llama_set_causal_attn",       (DL_FUNC) &r_llama_set_causal_attn,       2},
+    // Tokenize / Detokenize
+    {"r_llama_tokenize",              (DL_FUNC) &r_llama_tokenize,              3},
+    {"r_llama_detokenize",            (DL_FUNC) &r_llama_detokenize,            2},
+    // Generate
+    {"r_llama_generate",              (DL_FUNC) &r_llama_generate,              17},
+    // Embeddings & Logits
+    {"r_llama_embeddings",            (DL_FUNC) &r_llama_embeddings,            2},
+    {"r_llama_get_logits",            (DL_FUNC) &r_llama_get_logits,            1},
+    // Memory / KV Cache
+    {"r_llama_memory_clear",          (DL_FUNC) &r_llama_memory_clear,          1},
+    {"r_llama_memory_seq_rm",         (DL_FUNC) &r_llama_memory_seq_rm,         4},
+    {"r_llama_memory_seq_cp",         (DL_FUNC) &r_llama_memory_seq_cp,         5},
+    {"r_llama_memory_seq_keep",       (DL_FUNC) &r_llama_memory_seq_keep,       2},
+    {"r_llama_memory_seq_add",        (DL_FUNC) &r_llama_memory_seq_add,        5},
+    {"r_llama_memory_seq_pos_range",  (DL_FUNC) &r_llama_memory_seq_pos_range,  2},
+    {"r_llama_memory_can_shift",      (DL_FUNC) &r_llama_memory_can_shift,      1},
+    // State
+    {"r_llama_state_save",            (DL_FUNC) &r_llama_state_save,            2},
+    {"r_llama_state_load",            (DL_FUNC) &r_llama_state_load,            2},
+    // Chat templates
+    {"r_llama_chat_template",         (DL_FUNC) &r_llama_chat_template,         2},
+    {"r_llama_chat_apply_template",   (DL_FUNC) &r_llama_chat_apply_template,   3},
+    {"r_llama_chat_builtin_templates",(DL_FUNC) &r_llama_chat_builtin_templates,0},
+    // LoRA
+    {"r_llama_lora_load",             (DL_FUNC) &r_llama_lora_load,             2},
+    {"r_llama_lora_apply",            (DL_FUNC) &r_llama_lora_apply,            3},
+    {"r_llama_lora_remove",           (DL_FUNC) &r_llama_lora_remove,           2},
+    {"r_llama_lora_clear",            (DL_FUNC) &r_llama_lora_clear,            1},
+    // Performance
+    {"r_llama_perf_context",          (DL_FUNC) &r_llama_perf_context,          1},
+    {"r_llama_perf_context_reset",    (DL_FUNC) &r_llama_perf_context_reset,    1},
     {NULL, NULL, 0}
 };
 

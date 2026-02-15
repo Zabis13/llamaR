@@ -12,14 +12,15 @@ llama_chat_template(model, name = NULL)
 \item{name}{Optional template name (NULL for default)}
 }
 \value{
-Character string with the template, or NULL if not available
+A character scalar with the chat template string, or \code{NULL} if
+  the model does not contain a built-in template.
 }
 \description{
 Returns the chat template string embedded in the model file, if any.
 Common templates include ChatML, Llama, Mistral, etc.
 }
 \examples{
-\dontrun{
+if (FALSE) {
 model <- llama_load_model("llama-3.2-instruct.gguf")
 tmpl <- llama_chat_template(model)
 cat(tmpl)

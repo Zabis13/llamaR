@@ -7,7 +7,8 @@
 #'   - 1: Errors only (default)
 #'   - 2: Normal (warnings and info)
 #'   - 3: Verbose (all debug messages)
-#' @return Invisible NULL
+#' @return No return value, called for side effects. Sets the global
+#'   verbosity level used by the underlying 'llama.cpp' library.
 #' @export
 #' @examples
 #' # Suppress all output
@@ -26,7 +27,8 @@ llama_set_verbosity <- function(level) {
 
 #' Get current verbosity level
 #'
-#' @return Integer verbosity level (0-3)
+#' @return An integer scalar indicating the current verbosity level
+#'   (0 = silent, 1 = errors only, 2 = normal, 3 = verbose).
 #' @export
 #' @examples
 #' llama_get_verbosity()
@@ -40,7 +42,8 @@ llama_get_verbosity <- function() {
 #' runtime. Use the result to decide whether to pass `n_gpu_layers != 0`
 #' to [llama_load_model].
 #'
-#' @return Logical scalar
+#' @return A logical scalar: \code{TRUE} if at least one GPU backend
+#'   (e.g. Vulkan) is available, \code{FALSE} otherwise.
 #' @export
 #' @examples
 #' if (llama_supports_gpu()) {
@@ -56,10 +59,14 @@ llama_supports_gpu <- function() {
 #'
 #' @param path Path to the .gguf model file
 #' @param n_gpu_layers Number of layers to offload to GPU (0 = CPU only, -1 = all)
-#' @return An opaque model handle (ExternalPtr). Freed automatically on GC or via [llama_free_model].
+#' @return An external pointer (class \code{externalptr}) wrapping the loaded
+#'   model. This handle is required by \code{\link{llama_new_context}},
+#'   \code{\link{llama_model_info}}, and other model-level functions.
+#'   Freed automatically by the garbage collector or manually via
+#'   \code{\link{llama_free_model}}.
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' # Load model on CPU only
 #' model <- llama_load_model("model.gguf")
 #'
@@ -78,10 +85,11 @@ llama_load_model <- function(path, n_gpu_layers = 0L) {
 #' Free a loaded model
 #'
 #' @param model Model handle returned by [llama_load_model]
-#' @return Invisible NULL
+#' @return No return value, called for side effects. Releases the memory
+#'   associated with the model.
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' model <- llama_load_model("model.gguf")
 #' # ... use model ...
 #' llama_free_model(model)
@@ -101,17 +109,29 @@ llama_free_model <- function(model) {
 #'   - `n_layer`: number of layers
 #'   - `n_head`: number of attention heads
 #'   - `desc`: human-readable model description string
+#'   - `size`: model size in bytes
+#'   - `n_params`: number of parameters
+#'   - `has_encoder`: whether the model has an encoder
+#'   - `has_decoder`: whether the model has a decoder
+#'   - `is_recurrent`: whether the model is recurrent (e.g. Mamba)
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' model <- llama_load_model("model.gguf")
 #' info <- llama_model_info(model)
 #' cat("Model:", info$desc, "\n")
 #' cat("Layers:", info$n_layer, "\n")
 #' cat("Context:", info$n_ctx_train, "\n")
+#' cat("Size:", info$size / 1e9, "GB\n")
 #' }
 llama_model_info <- function(model) {
-    .Call("r_llama_model_info", model)
+    info <- .Call("r_llama_model_info", model)
+    info$size         <- .Call("r_llama_model_size", model)
+    info$n_params     <- .Call("r_llama_model_n_params", model)
+    info$has_encoder  <- .Call("r_llama_model_has_encoder", model)
+    info$has_decoder  <- .Call("r_llama_model_has_decoder", model)
+    info$is_recurrent <- .Call("r_llama_model_is_recurrent", model)
+    info
 }
 
 #' Create an inference context
@@ -119,10 +139,13 @@ llama_model_info <- function(model) {
 #' @param model Model handle returned by [llama_load_model]
 #' @param n_ctx Context window size (number of tokens). 0 means use the model's trained value.
 #' @param n_threads Number of CPU threads to use
-#' @return An opaque context handle (ExternalPtr). Freed automatically on GC or via [llama_free_context].
+#' @return An external pointer (class \code{externalptr}) wrapping the inference
+#'   context. This handle is required by generation, tokenization, and embedding
+#'   functions. Freed automatically by the garbage collector or manually via
+#'   \code{\link{llama_free_context}}.
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model, n_ctx = 4096L, n_threads = 8L)
 #' # ... use context for generation ...
@@ -136,10 +159,11 @@ llama_new_context <- function(model, n_ctx = 2048L, n_threads = 4L) {
 #' Free an inference context
 #'
 #' @param ctx Context handle returned by [llama_new_context]
-#' @return Invisible NULL
+#' @return No return value, called for side effects. Releases the memory
+#'   associated with the inference context.
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model)
 #' # ... use context ...
@@ -155,10 +179,10 @@ llama_free_context <- function(ctx) {
 #' @param ctx Context handle returned by [llama_new_context]
 #' @param text Character string to tokenize
 #' @param add_special Whether to add special tokens (BOS/EOS) as configured by the model
-#' @return Integer vector of token IDs
+#' @return An integer vector of token IDs as used by the model's vocabulary.
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model)
 #'
@@ -178,10 +202,10 @@ llama_tokenize <- function(ctx, text, add_special = TRUE) {
 #'
 #' @param ctx Context handle returned by [llama_new_context]
 #' @param tokens Integer vector of token IDs (as returned by [llama_tokenize])
-#' @return Character string
+#' @return A character scalar containing the decoded text.
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model)
 #'
@@ -208,10 +232,21 @@ llama_detokenize <- function(ctx, tokens) {
 #' @param top_k Top-K filtering (0 = disabled)
 #' @param top_p Top-P (nucleus) filtering (1.0 = disabled)
 #' @param seed Random seed for sampling
-#' @return Character string with generated text
+#' @param min_p Min-P filtering threshold (0.0 = disabled)
+#' @param typical_p Locally typical sampling threshold (1.0 = disabled)
+#' @param repeat_penalty Repetition penalty (1.0 = disabled)
+#' @param repeat_last_n Number of last tokens to penalize (0 = disabled, -1 = context size)
+#' @param frequency_penalty Frequency penalty (0.0 = disabled)
+#' @param presence_penalty Presence penalty (0.0 = disabled)
+#' @param mirostat Mirostat sampling mode (0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0)
+#' @param mirostat_tau Mirostat target entropy (tau parameter)
+#' @param mirostat_eta Mirostat learning rate (eta parameter)
+#' @param grammar GBNF grammar string for constrained generation (NULL = disabled)
+#' @return A character scalar containing the generated text (excluding the
+#'   original prompt).
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' model <- llama_load_model("model.gguf", n_gpu_layers = -1L)
 #' ctx <- llama_new_context(model, n_ctx = 2048L)
 #'
@@ -226,13 +261,31 @@ llama_detokenize <- function(ctx, tokens) {
 #' result <- llama_generate(ctx, "Write a poem about R:",
 #'                          max_new_tokens = 100L,
 #'                          temp = 1.0, top_p = 0.95)
+#'
+#' # With repetition penalty
+#' result <- llama_generate(ctx, "List items:",
+#'                          repeat_penalty = 1.1, repeat_last_n = 64L)
+#'
+#' # JSON output with grammar
+#' result <- llama_generate(ctx, "Output JSON:",
+#'                          grammar = 'root ::= "{" "}" ')
 #' }
 llama_generate <- function(ctx, prompt, max_new_tokens = 256L,
-                           temp = 0.8, top_k = 50L, top_p = 0.9, seed = 42L) {
+                           temp = 0.8, top_k = 50L, top_p = 0.9, seed = 42L,
+                           min_p = 0.0, typical_p = 1.0,
+                           repeat_penalty = 1.0, repeat_last_n = 64L,
+                           frequency_penalty = 0.0, presence_penalty = 0.0,
+                           mirostat = 0L, mirostat_tau = 5.0, mirostat_eta = 0.1,
+                           grammar = NULL) {
     stopifnot(is.character(prompt), length(prompt) == 1)
     .Call("r_llama_generate", ctx, prompt,
           as.integer(max_new_tokens), as.double(temp),
-          as.integer(top_k), as.double(top_p), as.integer(seed))
+          as.integer(top_k), as.double(top_p), as.integer(seed),
+          as.double(min_p), as.double(typical_p),
+          as.double(repeat_penalty), as.integer(repeat_last_n),
+          as.double(frequency_penalty), as.double(presence_penalty),
+          as.integer(mirostat), as.double(mirostat_tau), as.double(mirostat_eta),
+          grammar)
 }
 
 #' Extract embeddings for a text
@@ -242,10 +295,11 @@ llama_generate <- function(ctx, prompt, max_new_tokens = 256L,
 #'
 #' @param ctx Context handle returned by [llama_new_context]
 #' @param text Character string to embed
-#' @return Numeric vector of length `n_embd`
+#' @return A numeric vector of length \code{n_embd} (the model's embedding
+#'   dimension) containing the hidden-state representation of the input text.
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model)
 #'
@@ -272,10 +326,11 @@ llama_embeddings <- function(ctx, text) {
 #'
 #' @param model Model handle returned by [llama_load_model]
 #' @param name Optional template name (NULL for default)
-#' @return Character string with the template, or NULL if not available
+#' @return A character scalar with the chat template string, or \code{NULL} if
+#'   the model does not contain a built-in template.
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' model <- llama_load_model("llama-3.2-instruct.gguf")
 #' tmpl <- llama_chat_template(model)
 #' cat(tmpl)
@@ -293,10 +348,11 @@ llama_chat_template <- function(model, name = NULL) {
 #'   Roles are typically "system", "user", "assistant".
 #' @param template Template string (from [llama_chat_template]) or NULL to use default
 #' @param add_generation_prompt Whether to add the assistant prompt prefix at the end
-#' @return Formatted prompt string ready for generation
+#' @return A character scalar containing the formatted prompt string, ready
+#'   to be passed to \code{\link{llama_generate}}.
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' model <- llama_load_model("llama-3.2-instruct.gguf")
 #' tmpl <- llama_chat_template(model)
 #'
@@ -327,10 +383,12 @@ llama_chat_apply_template <- function(messages, template = NULL, add_generation_
 #'
 #' @param model Model handle returned by [llama_load_model]
 #' @param path Path to the LoRA adapter file (.gguf or .bin)
-#' @return LoRA adapter handle (ExternalPtr)
+#' @return An external pointer (class \code{externalptr}) wrapping the loaded
+#'   LoRA (Low-Rank Adaptation) adapter. Pass this handle to
+#'   \code{\link{llama_lora_apply}} to activate the adapter.
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' model <- llama_load_model("base-model.gguf")
 #' lora <- llama_lora_load(model, "fine-tuned-adapter.gguf")
 #'
@@ -354,10 +412,11 @@ llama_lora_load <- function(model, path) {
 #' @param ctx Context handle returned by [llama_new_context]
 #' @param lora LoRA adapter handle from [llama_lora_load]
 #' @param scale Scaling factor for the adapter (1.0 = full effect, 0.5 = half effect)
-#' @return Invisible NULL
+#' @return No return value, called for side effects. Activates the LoRA adapter
+#'   for the given context.
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' model <- llama_load_model("base-model.gguf")
 #' lora <- llama_lora_load(model, "adapter.gguf")
 #' ctx <- llama_new_context(model)
@@ -379,8 +438,13 @@ llama_lora_apply <- function(ctx, lora, scale = 1.0) {
 #'
 #' @param ctx Context handle returned by [llama_new_context]
 #' @param lora LoRA adapter handle to remove
-#' @return Integer: 0 on success, -1 if adapter was not applied
+#' @return An integer scalar: 0 on success, -1 if the adapter was not applied
+#'   to this context.
 #' @export
+#' @examples
+#' if (FALSE) {
+#' llama_lora_remove(ctx, lora)
+#' }
 llama_lora_remove <- function(ctx, lora) {
     .Call("r_llama_lora_remove", ctx, lora)
 }
@@ -390,10 +454,11 @@ llama_lora_remove <- function(ctx, lora) {
 #' Deactivates all LoRA adapters from the context, returning to base model behavior.
 #'
 #' @param ctx Context handle returned by [llama_new_context]
-#' @return Invisible NULL
+#' @return No return value, called for side effects. Removes all active LoRA
+#'   adapters from the context.
 #' @export
 #' @examples
-#' \dontrun{
+#' if (FALSE) {
 #' # Apply multiple LoRAs
 #' llama_lora_apply(ctx, lora1)
 #' llama_lora_apply(ctx, lora2)
@@ -404,4 +469,443 @@ llama_lora_remove <- function(ctx, lora) {
 llama_lora_clear <- function(ctx) {
     .Call("r_llama_lora_clear", ctx)
     invisible(NULL)
+}
+
+# ============================================================
+# Model metadata (individual access)
+# ============================================================
+
+#' Get all model metadata as a named character vector
+#'
+#' Returns all key-value metadata pairs stored in the GGUF model file.
+#'
+#' @param model Model handle returned by [llama_load_model]
+#' @return A named character vector where names are metadata keys and values
+#'   are the corresponding metadata values.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' model <- llama_load_model("model.gguf")
+#' meta <- llama_model_meta(model)
+#' print(meta)
+#' }
+llama_model_meta <- function(model) {
+    .Call("r_llama_model_meta", model)
+}
+
+#' Get a single model metadata value by key
+#'
+#' @param model Model handle returned by [llama_load_model]
+#' @param key Character string metadata key (e.g. "general.name", "general.architecture")
+#' @return A character scalar with the metadata value, or \code{NULL} if the key
+#'   does not exist.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' model <- llama_load_model("model.gguf")
+#' llama_model_meta_val(model, "general.name")
+#' llama_model_meta_val(model, "general.architecture")
+#' }
+llama_model_meta_val <- function(model, key) {
+    stopifnot(is.character(key), length(key) == 1)
+    .Call("r_llama_model_meta_val", model, key)
+}
+
+# ============================================================
+# Vocabulary info
+# ============================================================
+
+#' Get vocabulary special token IDs
+#'
+#' Returns the token IDs for special tokens (BOS, EOS, etc.) and
+#' fill-in-middle (FIM) tokens used by the model's vocabulary.
+#' A value of -1 indicates the token is not defined.
+#'
+#' @param model Model handle returned by [llama_load_model]
+#' @return A named integer vector with token IDs for: \code{bos}, \code{eos},
+#'   \code{eot}, \code{sep}, \code{nl}, \code{pad}, \code{fim_pre},
+#'   \code{fim_suf}, \code{fim_mid}, \code{fim_rep}, \code{fim_sep}.
+#'   A value of -1 means the token is not defined by the model.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' model <- llama_load_model("model.gguf")
+#' vocab <- llama_vocab_info(model)
+#' cat("BOS token:", vocab["bos"], "\n")
+#' cat("EOS token:", vocab["eos"], "\n")
+#' }
+llama_vocab_info <- function(model) {
+    .Call("r_llama_vocab_info", model)
+}
+
+# ============================================================
+# Context configuration
+# ============================================================
+
+#' Set the number of threads for a context
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param n_threads Number of threads for single-token generation
+#' @param n_threads_batch Number of threads for batch processing (prompt encoding).
+#'   Defaults to the same value as \code{n_threads}.
+#' @return No return value, called for side effects.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' model <- llama_load_model("model.gguf")
+#' ctx <- llama_new_context(model)
+#' llama_set_threads(ctx, n_threads = 8L)
+#' }
+llama_set_threads <- function(ctx, n_threads, n_threads_batch = n_threads) {
+    .Call("r_llama_set_n_threads", ctx, as.integer(n_threads), as.integer(n_threads_batch))
+    invisible(NULL)
+}
+
+#' Set causal attention mode
+#'
+#' When disabled, the model uses full (bidirectional) attention.
+#' This is useful for embedding models.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param causal Logical; \code{TRUE} for causal (autoregressive) attention,
+#'   \code{FALSE} for full bidirectional attention
+#' @return No return value, called for side effects.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' model <- llama_load_model("model.gguf")
+#' ctx <- llama_new_context(model)
+#' llama_set_causal_attn(ctx, FALSE)  # for embeddings
+#' }
+llama_set_causal_attn <- function(ctx, causal) {
+    .Call("r_llama_set_causal_attn", ctx, as.logical(causal))
+    invisible(NULL)
+}
+
+#' Get context window size
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return An integer scalar: the context window size (number of tokens).
+#' @export
+#' @examples
+#' if (FALSE) {
+#' model <- llama_load_model("model.gguf")
+#' ctx <- llama_new_context(model, n_ctx = 4096L)
+#' llama_n_ctx(ctx)  # 4096
+#' }
+llama_n_ctx <- function(ctx) {
+    .Call("r_llama_n_ctx", ctx)
+}
+
+# ============================================================
+# Memory / KV Cache
+# ============================================================
+
+#' Clear the KV cache
+#'
+#' Removes all tokens from the KV cache. Call this before starting
+#' a new generation from scratch.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return No return value, called for side effects.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' llama_memory_clear(ctx)
+#' }
+llama_memory_clear <- function(ctx) {
+    .Call("r_llama_memory_clear", ctx)
+    invisible(NULL)
+}
+
+#' Remove tokens from a sequence in the KV cache
+#'
+#' Removes cached tokens for the given sequence in the position range [p0, p1).
+#' Use p0 = -1 and p1 = -1 to remove all tokens for the sequence.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param seq_id Sequence ID (integer)
+#' @param p0 Start position (inclusive, -1 for beginning)
+#' @param p1 End position (exclusive, -1 for end)
+#' @return A logical scalar: \code{TRUE} if tokens were successfully removed.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' # Remove all tokens from sequence 0
+#' llama_memory_seq_rm(ctx, seq_id = 0L, p0 = -1L, p1 = -1L)
+#' }
+llama_memory_seq_rm <- function(ctx, seq_id, p0 = -1L, p1 = -1L) {
+    .Call("r_llama_memory_seq_rm", ctx, as.integer(seq_id),
+          as.integer(p0), as.integer(p1))
+}
+
+#' Copy a sequence in the KV cache
+#'
+#' Copies cached tokens from one sequence to another in the position range [p0, p1).
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param seq_id_src Source sequence ID
+#' @param seq_id_dst Destination sequence ID
+#' @param p0 Start position (inclusive, -1 for beginning)
+#' @param p1 End position (exclusive, -1 for end)
+#' @return No return value, called for side effects.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' # Copy sequence 0 to sequence 1
+#' llama_memory_seq_cp(ctx, seq_id_src = 0L, seq_id_dst = 1L,
+#'                     p0 = -1L, p1 = -1L)
+#' }
+llama_memory_seq_cp <- function(ctx, seq_id_src, seq_id_dst, p0 = -1L, p1 = -1L) {
+    .Call("r_llama_memory_seq_cp", ctx, as.integer(seq_id_src),
+          as.integer(seq_id_dst), as.integer(p0), as.integer(p1))
+    invisible(NULL)
+}
+
+#' Keep only one sequence in the KV cache
+#'
+#' Removes all sequences except the specified one from the KV cache.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param seq_id Sequence ID to keep
+#' @return No return value, called for side effects.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' llama_memory_seq_keep(ctx, seq_id = 0L)
+#' }
+llama_memory_seq_keep <- function(ctx, seq_id) {
+    .Call("r_llama_memory_seq_keep", ctx, as.integer(seq_id))
+    invisible(NULL)
+}
+
+#' Shift token positions in a sequence
+#'
+#' Adds a position delta to all tokens in the given sequence within [p0, p1).
+#' This is useful for implementing context shifting (sliding window).
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param seq_id Sequence ID
+#' @param p0 Start position (inclusive)
+#' @param p1 End position (exclusive)
+#' @param delta Position shift amount (can be negative)
+#' @return No return value, called for side effects.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' # Shift positions left by 100 for context window management
+#' llama_memory_seq_add(ctx, seq_id = 0L, p0 = 100L, p1 = -1L, delta = -100L)
+#' }
+llama_memory_seq_add <- function(ctx, seq_id, p0, p1, delta) {
+    .Call("r_llama_memory_seq_add", ctx, as.integer(seq_id),
+          as.integer(p0), as.integer(p1), as.integer(delta))
+    invisible(NULL)
+}
+
+#' Get position range for a sequence
+#'
+#' Returns the minimum and maximum token positions for a given sequence
+#' in the KV cache.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param seq_id Sequence ID
+#' @return A named integer vector with elements \code{min} and \code{max}.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' range <- llama_memory_seq_pos_range(ctx, seq_id = 0L)
+#' cat("Positions:", range["min"], "to", range["max"], "\n")
+#' }
+llama_memory_seq_pos_range <- function(ctx, seq_id) {
+    .Call("r_llama_memory_seq_pos_range", ctx, as.integer(seq_id))
+}
+
+#' Check if the KV cache supports shifting
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return A logical scalar: \code{TRUE} if the memory supports position shifting.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' if (llama_memory_can_shift(ctx)) {
+#'   message("Context shifting is supported")
+#' }
+#' }
+llama_memory_can_shift <- function(ctx) {
+    .Call("r_llama_memory_can_shift", ctx)
+}
+
+# ============================================================
+# State save / load
+# ============================================================
+
+#' Save context state to file
+#'
+#' Saves the full context state (including KV cache) to a binary file.
+#' This allows resuming generation later from the exact same state.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param path File path to save state to
+#' @return A logical scalar: \code{TRUE} on success (errors on failure).
+#' @export
+#' @examples
+#' if (FALSE) {
+#' llama_state_save(ctx, "state.bin")
+#' }
+llama_state_save <- function(ctx, path) {
+    stopifnot(is.character(path), length(path) == 1)
+    .Call("r_llama_state_save", ctx, path)
+}
+
+#' Load context state from file
+#'
+#' Restores a previously saved context state (including KV cache).
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param path File path to load state from
+#' @return A logical scalar: \code{TRUE} on success (errors on failure).
+#' @export
+#' @examples
+#' if (FALSE) {
+#' llama_state_load(ctx, "state.bin")
+#' # Continue generation from saved state
+#' result <- llama_generate(ctx, "")
+#' }
+llama_state_load <- function(ctx, path) {
+    stopifnot(is.character(path), length(path) == 1)
+    if (!file.exists(path)) stop("llamaR: state file does not exist: ", path)
+    .Call("r_llama_state_load", ctx, path)
+}
+
+# ============================================================
+# Logits
+# ============================================================
+
+#' Get logits from the last decode step
+#'
+#' Returns the raw logit vector (unnormalized log-probabilities) from the
+#' last token position after a decode operation.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return A numeric vector of length \code{n_vocab} containing the logits.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' model <- llama_load_model("model.gguf")
+#' ctx <- llama_new_context(model)
+#' result <- llama_generate(ctx, "The capital of France is", max_new_tokens = 1L)
+#' logits <- llama_get_logits(ctx)
+#' # Find top token
+#' top_id <- which.max(logits)
+#' }
+llama_get_logits <- function(ctx) {
+    .Call("r_llama_get_logits", ctx)
+}
+
+# ============================================================
+# Performance
+# ============================================================
+
+#' Get performance statistics
+#'
+#' Returns timing and count statistics for the current context,
+#' including prompt processing time, token generation time, and counts.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return A named list with fields:
+#'   - `t_load_ms`: model load time in milliseconds
+#'   - `t_p_eval_ms`: prompt processing time in milliseconds
+#'   - `t_eval_ms`: token generation time in milliseconds
+#'   - `n_p_eval`: number of prompt tokens processed
+#'   - `n_eval`: number of tokens generated
+#'   - `n_reused`: number of reused compute graphs
+#' @export
+#' @examples
+#' if (FALSE) {
+#' result <- llama_generate(ctx, "Hello world")
+#' perf <- llama_perf(ctx)
+#' cat("Prompt speed:", perf$n_p_eval / (perf$t_p_eval_ms / 1000), "tok/s\n")
+#' cat("Generation speed:", perf$n_eval / (perf$t_eval_ms / 1000), "tok/s\n")
+#' }
+llama_perf <- function(ctx) {
+    .Call("r_llama_perf_context", ctx)
+}
+
+#' Reset performance counters
+#'
+#' Resets the timing and token count statistics for the context.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return No return value, called for side effects.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' llama_perf_reset(ctx)
+#' }
+llama_perf_reset <- function(ctx) {
+    .Call("r_llama_perf_context_reset", ctx)
+    invisible(NULL)
+}
+
+# ============================================================
+# System & Hardware info
+# ============================================================
+
+#' Get system information string
+#'
+#' Returns a string with information about the system capabilities
+#' detected by llama.cpp (SIMD support, etc.).
+#'
+#' @return A character scalar with system capability information.
+#' @export
+#' @examples
+#' cat(llama_system_info(), "\n")
+llama_system_info <- function() {
+    .Call("r_llama_system_info")
+}
+
+#' Check whether memory-mapped file I/O is supported
+#'
+#' @return A logical scalar: \code{TRUE} if mmap is supported.
+#' @export
+#' @examples
+#' llama_supports_mmap()
+llama_supports_mmap <- function() {
+    .Call("r_llama_supports_mmap")
+}
+
+#' Check whether memory locking is supported
+#'
+#' @return A logical scalar: \code{TRUE} if mlock is supported.
+#' @export
+#' @examples
+#' llama_supports_mlock()
+llama_supports_mlock <- function() {
+    .Call("r_llama_supports_mlock")
+}
+
+#' Get maximum number of devices
+#'
+#' @return An integer scalar: the maximum number of compute devices available.
+#' @export
+#' @examples
+#' llama_max_devices()
+llama_max_devices <- function() {
+    .Call("r_llama_max_devices")
+}
+
+# ============================================================
+# Chat: builtin templates
+# ============================================================
+
+#' List built-in chat templates
+#'
+#' Returns a character vector of all chat template names supported by llama.cpp.
+#'
+#' @return A character vector of built-in template names.
+#' @export
+#' @examples
+#' llama_chat_builtin_templates()
+llama_chat_builtin_templates <- function() {
+    .Call("r_llama_chat_builtin_templates")
 }

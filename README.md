@@ -1,6 +1,6 @@
 # llamaR
 
-R interface to [llama.cpp](https://github.com/ggerganov/llama.cpp) for running large language models locally.
+R interface to [llama.cpp](https://github.com/ggml-org/llama.cpp) for running large language models locally.
 
 ## Features
 
@@ -10,13 +10,13 @@ R interface to [llama.cpp](https://github.com/ggerganov/llama.cpp) for running l
 - Embedding extraction
 - Chat template support (ChatML, Llama, Mistral, etc.)
 - LoRA adapters
-- Optional GPU acceleration via Vulkan
+- Optional GPU acceleration via Vulkan (auto-detected on Linux and Windows)
 
 ## Installation
 
 ### Dependencies
 
-Requires [ggmlR](https://github.com/Zabis13/ggmlR) >= 0.5.1:
+Requires [ggmlR](https://github.com/Zabis13/ggmlR) >= 0.5.4:
 
 ```r
 # Install ggmlR first
@@ -28,7 +28,7 @@ remotes::install_github("Zabis13/llamaR")
 
 ### System Requirements
 
-- R >= 4.0.0
+- R >= 4.1.0
 - C++17 compiler
 - GNU make
 
@@ -51,6 +51,32 @@ cat(result)
 llama_free_context(ctx)
 llama_free_model(model)
 ```
+
+## Downloading Models from Hugging Face
+
+Download GGUF models directly from Hugging Face with automatic caching:
+
+```r
+library(llamaR)
+
+# List available GGUF files in a repository
+files <- llama_hf_list("TheBloke/Llama-2-7B-GGUF")
+print(files)
+
+# Download a specific quantization
+path <- llama_hf_download("TheBloke/Llama-2-7B-GGUF", pattern = "*q4_k_m*")
+
+# Or download and load in one step
+model <- llama_load_model_hf("TheBloke/Llama-2-7B-GGUF",
+                              pattern = "*q4_k_m*",
+                              n_gpu_layers = -1L)
+
+# Manage cache
+llama_hf_cache_info()
+llama_hf_cache_clear()
+```
+
+For private repositories, set the `HF_TOKEN` environment variable or pass `token` directly.
 
 ## Usage
 
@@ -200,4 +226,4 @@ Yuri Baramykov
 - [GitHub](https://github.com/Zabis13/llamaR)
 - [Bug Reports](https://github.com/Zabis13/llamaR/issues)
 - [ggmlR](https://github.com/Zabis13/ggmlR) - tensor operations dependency
-- [llama.cpp](https://github.com/ggerganov/llama.cpp) - inference backend
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) - inference backend

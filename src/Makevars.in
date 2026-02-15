@@ -8,7 +8,7 @@ GGMLR_LIB = $(shell "$(R_HOME)/bin/Rscript" -e "cat(system.file('lib', package='
 PKG_CPPFLAGS = -I. -I$(GGMLR_INCLUDE) -DGGML_USE_CPU @VULKAN_CPPFLAGS@
 
 # Compiler flags
-PKG_CXXFLAGS = @OPENMP_CXXFLAGS@
+PKG_CXXFLAGS = @OPENMP_CXXFLAGS@ @SIMD_CFLAGS@
 
 # Link with ggmlR static library
 PKG_LIBS = -L$(GGMLR_LIB) -lggml @OPENMP_CXXFLAGS@ @VULKAN_LIBS@ -lpthread -lm
