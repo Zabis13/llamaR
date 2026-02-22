@@ -909,3 +909,73 @@ llama_max_devices <- function() {
 llama_chat_builtin_templates <- function() {
     .Call("r_llama_chat_builtin_templates")
 }
+
+#' Convert a single token ID to its text piece
+#'
+#' @param ctx A context pointer (llama_context).
+#' @param token Integer token ID.
+#' @param special Logical. If TRUE, render special tokens (e.g. \code{<bos>}).
+#' @return A character string — the text piece for the token.
+#' @export
+#' @examples
+#' \dontrun{
+#' model <- llama_load_model("model.gguf")
+#' ctx   <- llama_new_context(model)
+#' llama_token_to_piece(ctx, 1L)
+#' }
+llama_token_to_piece <- function(ctx, token, special = FALSE) {
+    .Call("r_llama_token_to_piece", ctx, as.integer(token), as.logical(special))
+}
+
+#' Encode tokens using the encoder (encoder-decoder models only)
+#'
+#' Runs the encoder pass for encoder-decoder architectures (e.g. T5, BART).
+#' The encoder output is stored internally and used by subsequent decoder calls.
+#'
+#' @param ctx A context pointer (llama_context).
+#' @param tokens Integer vector of token IDs to encode.
+#' @return Integer return code (0 = success, negative = error).
+#' @export
+#' @examples
+#' \dontrun{
+#' model  <- llama_load_model("t5-model.gguf")
+#' ctx    <- llama_new_context(model)
+#' tokens <- llama_tokenize(ctx, "Hello world")
+#' llama_encode(ctx, tokens)
+#' }
+llama_encode <- function(ctx, tokens) {
+    .Call("r_llama_encode", ctx, as.integer(tokens))
+}
+
+#' Initialise a llama batch
+#'
+#' Allocates a \code{llama_batch} that can hold up to \code{n_tokens} tokens.
+#' Use \code{llama_batch_free()} to release the memory when done.
+#'
+#' @param n_tokens Maximum number of tokens in the batch.
+#' @param embd Embedding size; 0 means token-ID mode (normal inference).
+#' @param n_seq_max Maximum number of sequences per token.
+#' @return An external pointer to the allocated batch.
+#' @export
+#' @examples
+#' \dontrun{
+#' batch <- llama_batch_init(512L)
+#' llama_batch_free(batch)
+#' }
+llama_batch_init <- function(n_tokens, embd = 0L, n_seq_max = 1L) {
+    .Call("r_llama_batch_init", as.integer(n_tokens), as.integer(embd), as.integer(n_seq_max))
+}
+
+#' Free a llama batch allocated with \code{llama_batch_init()}
+#'
+#' @param batch An external pointer returned by \code{llama_batch_init()}.
+#' @return \code{NULL} invisibly.
+#' @export
+#' @examples
+#' \dontrun{
+#' batch <- llama_batch_init(512L)
+#' llama_batch_free(batch)
+#' }
+llama_batch_free <- function(batch) {
+    invisible(.Call("r_llama_batch_free", batch))
+}

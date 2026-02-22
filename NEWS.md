@@ -1,3 +1,30 @@
+# llamaR 0.2.1
+
+## New functions
+
+* `llama_token_to_piece()` — convert a single token ID to its text piece.
+* `llama_encode()` — run the encoder pass for encoder-decoder models (e.g. T5, BART).
+* `llama_batch_init()` / `llama_batch_free()` — low-level batch allocation and release
+  with automatic GC finalizer.
+
+## Bug fixes
+
+* Fixed compilation failure on macOS with Apple clang 17 / Xcode 16.4:
+  removed `extern "C"` block wrapping `#include <R.h>` in `r_llama_compat.h`
+  (C++ templates cannot appear inside `extern "C"` linkage).
+* Fixed macro conflict between `Rinternals.h` `#define length(x)` and
+  `std::codecvt::length()` in `r_llama_interface.cpp`:
+  C++ standard headers are now included before R headers, followed by
+  `#undef length`.
+
+## Tests
+
+* Added 9 new test blocks covering `llama_token_to_piece`, `llama_batch_init`,
+  `llama_batch_free`, and `llama_encode`, including GPU context variants.
+* Total: 103 passing, 4 expected skips.
+
+---
+
 # llamaR 0.2.0
 
 ## Hugging Face integration

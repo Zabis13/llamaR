@@ -459,3 +459,128 @@ test_that("lora_clear works on context", {
     llama_free_context(ctx)
     llama_free_model(model)
 })
+
+# ============================================================
+# token_to_piece
+# ============================================================
+
+test_that("token_to_piece returns character string", {
+    skip_if_no_model()
+
+    # add_special=FALSE to avoid BOS which may render as empty string
+    tokens <- llama_tokenize(shared_ctx, "Hello", add_special = FALSE)
+    piece  <- llama_token_to_piece(shared_ctx, tokens[1])
+
+    expect_true(is.character(piece))
+    expect_equal(length(piece), 1L)
+    expect_true(nchar(piece) > 0)
+})
+
+test_that("token_to_piece with special=TRUE does not error", {
+    skip_if_no_model()
+
+    vocab  <- llama_vocab_info(shared_model)
+    bos_id <- vocab["bos"]
+    if (is.na(bos_id) || bos_id < 0L) skip("model has no BOS token")
+
+    piece <- llama_token_to_piece(shared_ctx, bos_id, special = TRUE)
+    expect_true(is.character(piece))
+    expect_equal(length(piece), 1L)
+})
+
+test_that("token_to_piece round-trips with tokenize", {
+    skip_if_no_model()
+
+    text   <- "world"
+    tokens <- llama_tokenize(shared_ctx, text, add_special = FALSE)
+    pieces <- vapply(tokens, function(t) llama_token_to_piece(shared_ctx, t), character(1))
+
+    expect_true(length(pieces) > 0)
+    reconstructed <- paste(pieces, collapse = "")
+    # strip possible leading space added by tokenizer
+    expect_true(grepl(text, reconstructed, fixed = TRUE))
+})
+
+# ============================================================
+# GPU: token_to_piece on GPU context
+# ============================================================
+
+test_that("token_to_piece works on GPU context", {
+    skip_if_no_model()
+    skip_if(!llama_supports_gpu(), "GPU not available")
+
+    gpu_model <- llama_load_model(MODEL_PATH, n_gpu_layers = -1L)
+    gpu_ctx   <- llama_new_context(gpu_model, n_ctx = 128L)
+    on.exit({ llama_free_context(gpu_ctx); llama_free_model(gpu_model) }, add = TRUE)
+
+    tokens <- llama_tokenize(gpu_ctx, "GPU test", add_special = FALSE)
+    piece  <- llama_token_to_piece(gpu_ctx, tokens[1])
+
+    expect_true(is.character(piece))
+    expect_true(nchar(piece) > 0)
+})
+
+# ============================================================
+# llama_batch_init / llama_batch_free
+# ============================================================
+
+test_that("batch_init returns external pointer", {
+    batch <- llama_batch_init(512L)
+
+    expect_true(is.list(batch) || inherits(batch, "externalptr"))
+    expect_false(is.null(batch))
+})
+
+test_that("batch_init with embd mode does not error", {
+    expect_no_error(llama_batch_init(64L, embd = 512L, n_seq_max = 4L))
+})
+
+test_that("batch_free clears the batch", {
+    batch <- llama_batch_init(128L)
+    expect_no_error(llama_batch_free(batch))
+    # double-free should be safe (pointer already NULLed)
+    expect_no_error(llama_batch_free(batch))
+})
+
+test_that("batch GC finalizer works (no explicit free)", {
+    # allocate inside local scope — GC should clean up
+    local({
+        b <- llama_batch_init(256L)
+        expect_false(is.null(b))
+    })
+    gc()
+    succeed()
+})
+
+# ============================================================
+# llama_encode (encoder-decoder)
+# ============================================================
+
+test_that("llama_encode returns integer on encoder-decoder model", {
+    skip_if_no_model()
+    skip_if(!shared_info$has_encoder || !shared_info$has_decoder,
+            "model is not encoder-decoder")
+
+    tokens <- llama_tokenize(shared_ctx, "Translate: Hello world")
+    ret    <- llama_encode(shared_ctx, tokens)
+
+    expect_true(is.integer(ret))
+    expect_equal(ret, 0L)
+})
+
+# ============================================================
+# GPU: batch_init + encode on GPU context
+# ============================================================
+
+test_that("batch_init works with GPU context loaded", {
+    skip_if_no_model()
+    skip_if(!llama_supports_gpu(), "GPU not available")
+
+    gpu_model <- llama_load_model(MODEL_PATH, n_gpu_layers = -1L)
+    gpu_ctx   <- llama_new_context(gpu_model, n_ctx = 128L)
+    on.exit({ llama_free_context(gpu_ctx); llama_free_model(gpu_model) }, add = TRUE)
+
+    batch <- llama_batch_init(128L)
+    expect_false(is.null(batch))
+    expect_no_error(llama_batch_free(batch))
+})

@@ -1,9 +1,15 @@
-#include <R.h>
-#include <Rinternals.h>
-#include <R_ext/Rdynload.h>
 #include <vector>
 #include <string>
 #include <cstring>
+
+#include <R.h>
+#include <Rinternals.h>
+#include <R_ext/Rdynload.h>
+
+// Rinternals.h defines length() as a macro which conflicts with C++ methods
+#ifdef length
+#undef length
+#endif
 
 #include "llama.h"
 
@@ -909,6 +915,82 @@ extern "C" SEXP r_llama_chat_builtin_templates(void) {
 }
 
 // ============================================================
+// Batch: init / free
+// ============================================================
+
+extern "C" SEXP r_llama_batch_init(SEXP r_n_tokens, SEXP r_embd, SEXP r_n_seq_max) {
+    int32_t n_tokens  = INTEGER(r_n_tokens)[0];
+    int32_t embd      = INTEGER(r_embd)[0];
+    int32_t n_seq_max = INTEGER(r_n_seq_max)[0];
+
+    struct llama_batch * batch = new llama_batch;
+    *batch = llama_batch_init(n_tokens, embd, n_seq_max);
+
+    SEXP result = PROTECT(R_MakeExternalPtr(batch, Rf_mkString("llama_batch"), R_NilValue));
+    R_RegisterCFinalizer(result, [](SEXP x) {
+        llama_batch * b = (llama_batch *) R_ExternalPtrAddr(x);
+        if (b) {
+            llama_batch_free(*b);
+            delete b;
+            R_SetExternalPtrAddr(x, NULL);
+        }
+    });
+    UNPROTECT(1);
+    return result;
+}
+
+extern "C" SEXP r_llama_batch_free(SEXP r_batch) {
+    llama_batch * b = (llama_batch *) R_ExternalPtrAddr(r_batch);
+    if (b) {
+        llama_batch_free(*b);
+        delete b;
+        R_SetExternalPtrAddr(r_batch, NULL);
+    }
+    return R_NilValue;
+}
+
+// ============================================================
+// Encode (encoder-decoder models)
+// ============================================================
+
+extern "C" SEXP r_llama_encode(SEXP r_ctx, SEXP r_tokens) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    int n_tokens = LENGTH(r_tokens);
+    std::vector<llama_token> tokens(n_tokens);
+    for (int i = 0; i < n_tokens; i++) {
+        tokens[i] = INTEGER(r_tokens)[i];
+    }
+
+    struct llama_batch batch = llama_batch_get_one(tokens.data(), n_tokens);
+    int32_t ret = llama_encode(ctx, batch);
+    if (ret < 0) Rf_error("llamaR: llama_encode failed (code %d)", ret);
+
+    return Rf_ScalarInteger(ret);
+}
+
+// ============================================================
+// Token to piece
+// ============================================================
+
+extern "C" SEXP r_llama_token_to_piece(SEXP r_ctx, SEXP r_token, SEXP r_special) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx));
+    llama_token token = INTEGER(r_token)[0];
+    bool special = LOGICAL(r_special)[0] != 0;
+
+    char buf[256];
+    int32_t n = llama_token_to_piece(vocab, token, buf, sizeof(buf) - 1, 0, special);
+    if (n < 0) Rf_error("llamaR: llama_token_to_piece failed (buffer too small)");
+    buf[n] = '\0';
+
+    return Rf_mkString(buf);
+}
+
+// ============================================================
 // Registration
 // ============================================================
 
@@ -942,9 +1024,15 @@ static const R_CallMethodDef CallEntries[] = {
     {"r_llama_n_ctx",                 (DL_FUNC) &r_llama_n_ctx,                 1},
     {"r_llama_set_n_threads",         (DL_FUNC) &r_llama_set_n_threads,         3},
     {"r_llama_set_causal_attn",       (DL_FUNC) &r_llama_set_causal_attn,       2},
-    // Tokenize / Detokenize
+    // Tokenize / Detokenize / Token piece
     {"r_llama_tokenize",              (DL_FUNC) &r_llama_tokenize,              3},
     {"r_llama_detokenize",            (DL_FUNC) &r_llama_detokenize,            2},
+    {"r_llama_token_to_piece",        (DL_FUNC) &r_llama_token_to_piece,        3},
+    // Batch
+    {"r_llama_batch_init",            (DL_FUNC) &r_llama_batch_init,            3},
+    {"r_llama_batch_free",            (DL_FUNC) &r_llama_batch_free,            1},
+    // Encode
+    {"r_llama_encode",                (DL_FUNC) &r_llama_encode,                2},
     // Generate
     {"r_llama_generate",              (DL_FUNC) &r_llama_generate,              17},
     // Embeddings & Logits

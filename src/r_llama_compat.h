@@ -5,10 +5,6 @@
 #ifndef R_LLAMA_COMPAT_H
 #define R_LLAMA_COMPAT_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <stdint.h>
 #include <R.h>
 #include <R_ext/Print.h>
@@ -52,9 +48,5 @@ static inline void r_llama_exit(int status) {
 
 #undef _Exit
 #define _Exit(status) r_llama_exit(status)
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif // R_LLAMA_COMPAT_H
