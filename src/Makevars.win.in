@@ -7,18 +7,14 @@ PKG_CPPFLAGS_WIN = -D__USE_MINGW_ANSI_STDIO=1
 GGMLR_INCLUDE = $(shell "$(R_HOME)/bin/Rscript" -e "cat(system.file('include', package='ggmlR'))")
 GGMLR_LIB = $(shell "$(R_HOME)/bin/Rscript" -e "cat(system.file('lib', package='ggmlR'))")
 
-# Vulkan flags (set by configure.win, empty if no Vulkan)
-VULKAN_CPPFLAGS = @VULKAN_CPPFLAGS@
-VULKAN_LIBS = @VULKAN_LIBS@
-
 # Include paths
-PKG_CPPFLAGS = -I. -I$(GGMLR_INCLUDE) -DGGML_USE_CPU $(PKG_CPPFLAGS_WIN) $(VULKAN_CPPFLAGS)
+PKG_CPPFLAGS = -I. -I$(GGMLR_INCLUDE) -DGGML_USE_CPU $(PKG_CPPFLAGS_WIN)
 
 # Compiler flags
-PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) @SIMD_CFLAGS@
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS)
 
 # Link with ggmlR static library
-PKG_LIBS = -L$(GGMLR_LIB) -lggml $(SHLIB_OPENMP_CXXFLAGS) $(VULKAN_LIBS) -lpthread -lm
+PKG_LIBS = -L$(GGMLR_LIB) -lggml $(SHLIB_OPENMP_CXXFLAGS) @VULKAN_LIBS@ -lpthread -lm
 
 # llama.cpp sources
 SOURCES_CPP = \

@@ -8,8 +8,8 @@ Authors@R: c(
            comment = "Author of the 'llama.cpp' library included in src/"))
 Description: Provides 'R' bindings to 'llama.cpp' for running Large Language Models
     ('LLMs') locally with optional 'Vulkan' GPU acceleration via 'ggmlR'. Supports
-    model loading, text generation, tokenization, token-to-piece conversion,
-    embeddings, encoder-decoder inference, low-level batch management, chat
+    model loading, text generation, 'tokenization', token-to-piece conversion,
+    'embeddings', encoder-decoder inference, low-level batch management, chat
     templates, and 'LoRA' adapters. Built on top of 'ggmlR' for efficient tensor
     operations.
 License: MIT + file LICENSE
@@ -29,4 +29,3 @@ Suggests:
     withr
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3
-Remotes: Zabis13/ggmlR

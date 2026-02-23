@@ -5,10 +5,10 @@ GGMLR_INCLUDE = $(shell "$(R_HOME)/bin/Rscript" -e "cat(system.file('include', p
 GGMLR_LIB = $(shell "$(R_HOME)/bin/Rscript" -e "cat(system.file('lib', package='ggmlR'))")
 
 # Include paths
-PKG_CPPFLAGS = -I. -I$(GGMLR_INCLUDE) -DGGML_USE_CPU @VULKAN_CPPFLAGS@
+PKG_CPPFLAGS = -I. -I$(GGMLR_INCLUDE) -DGGML_USE_CPU
 
 # Compiler flags
-PKG_CXXFLAGS = @OPENMP_CXXFLAGS@ @SIMD_CFLAGS@
+PKG_CXXFLAGS = @OPENMP_CXXFLAGS@
 
 # Link with ggmlR static library
 PKG_LIBS = -L$(GGMLR_LIB) -lggml @OPENMP_CXXFLAGS@ @VULKAN_LIBS@ -lpthread -lm
