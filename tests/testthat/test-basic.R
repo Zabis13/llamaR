@@ -576,6 +576,51 @@ test_that("llama_encode returns integer on encoder-decoder model", {
 # embed_llamar
 # ============================================================
 
+test_that("llama_embed_batch returns matrix with correct dimensions", {
+    skip_if_no_model()
+
+    ctx <- llama_new_context(shared_model, n_ctx = 256L, n_threads = 2L)
+    on.exit(llama_free_context(ctx))
+    llama_set_causal_attn(ctx, FALSE)
+
+    mat <- llama_embed_batch(ctx, c("hello", "world", "test"))
+
+    expect_true(is.matrix(mat))
+    expect_equal(nrow(mat), 3L)
+    expect_equal(ncol(mat), shared_info$n_embd)
+    expect_true(any(mat != 0))
+})
+
+test_that("llama_embed_batch single text matches llama_embeddings", {
+    skip_if_no_model()
+
+    ctx1 <- llama_new_context(shared_model, n_ctx = 256L, n_threads = 2L)
+    on.exit(llama_free_context(ctx1), add = TRUE)
+
+    emb_single <- llama_embeddings(ctx1, "hello")
+
+    ctx2 <- llama_new_context(shared_model, n_ctx = 256L, n_threads = 2L)
+    on.exit(llama_free_context(ctx2), add = TRUE)
+    llama_set_causal_attn(ctx2, FALSE)
+
+    mat <- llama_embed_batch(ctx2, "hello")
+
+    expect_equal(nrow(mat), 1L)
+    expect_equal(ncol(mat), length(emb_single))
+})
+
+test_that("llama_embed_batch empty input returns 0-row matrix", {
+    skip_if_no_model()
+
+    ctx <- llama_new_context(shared_model, n_ctx = 256L, n_threads = 2L)
+    on.exit(llama_free_context(ctx))
+
+    mat <- llama_embed_batch(ctx, character(0))
+
+    expect_true(is.matrix(mat))
+    expect_equal(nrow(mat), 0L)
+})
+
 test_that("embed_llamar partial application returns a function", {
     skip_if_no_model()
 

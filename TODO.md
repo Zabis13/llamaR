@@ -33,7 +33,7 @@
 
 ### R Interface — ragnar / ellmer Integration
 - [x] `embed_llamar()` — embedding-провайдер для `ragnar_store_create(embed = ...)`
-- [ ] `llama_embed_batch()` — батчевый embed списка строк
+- [x] `llama_embed_batch()` — батчевый embed списка строк
 - [ ] `chat_llamar()` — ellmer::Chat-совместимый объект для `ragnar_register_tool_retrieve()`
 
 ### Sampling

@@ -435,6 +435,138 @@ extern "C" SEXP r_llama_embeddings(SEXP r_ctx, SEXP r_text) {
     return r_result;
 }
 
+// Helper: tokenize a single C-string, returns token count
+static int tokenize_text(const llama_vocab * vocab, const char * text,
+                         std::vector<llama_token> & out) {
+    int text_len = (int) strlen(text);
+    int n_tok = llama_tokenize(vocab, text, text_len, NULL, 0, true, false);
+    if (n_tok < 0) n_tok = -n_tok;
+    out.resize(n_tok);
+    int actual = llama_tokenize(vocab, text, text_len, out.data(), n_tok, true, false);
+    if (actual < 0) return -1;
+    out.resize(actual);
+    return actual;
+}
+
+// Helper: embed a single text using decode + embeddings_ith(-1)
+static void embed_single(llama_context * ctx, const llama_vocab * vocab,
+                          const char * text, float * out, int n_embd, int idx) {
+    std::vector<llama_token> tokens;
+    if (tokenize_text(vocab, text, tokens) < 0)
+        Rf_error("llamaR: tokenization failed for text %d", idx + 1);
+
+    llama_memory_clear(llama_get_memory(ctx), true);
+    struct llama_batch batch = llama_batch_get_one(tokens.data(), (int) tokens.size());
+    int ret = llama_decode(ctx, batch);
+    if (ret != 0)
+        Rf_error("llamaR: embed decode failed for text %d (code %d)", idx + 1, ret);
+    llama_synchronize(ctx);
+
+    float * emb = llama_get_embeddings_ith(ctx, -1);
+    if (!emb)
+        Rf_error("llamaR: embeddings NULL for text %d", idx + 1);
+    memcpy(out, emb, n_embd * sizeof(float));
+}
+
+// Batch embeddings: multiple texts, tries pooled batch first, falls back to sequential
+extern "C" SEXP r_llama_embed_batch(SEXP r_ctx, SEXP r_texts) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    int n_embd = llama_model_n_embd(model);
+    int n_texts = Rf_length(r_texts);
+
+    if (n_texts == 0) {
+        SEXP r_mat = PROTECT(Rf_allocMatrix(REALSXP, 0, n_embd));
+        UNPROTECT(1);
+        return r_mat;
+    }
+
+    llama_set_embeddings(ctx, true);
+
+    // --- tokenize all texts ---
+    std::vector<std::vector<llama_token>> all_tokens(n_texts);
+    int total_tokens = 0;
+    for (int s = 0; s < n_texts; s++) {
+        const char * text = CHAR(STRING_ELT(r_texts, s));
+        if (tokenize_text(vocab, text, all_tokens[s]) < 0) {
+            llama_set_embeddings(ctx, false);
+            Rf_error("llamaR: tokenization failed for text %d", s + 1);
+        }
+        total_tokens += (int) all_tokens[s].size();
+    }
+
+    // Allocate result matrix (column-major)
+    SEXP r_mat = PROTECT(Rf_allocMatrix(REALSXP, n_texts, n_embd));
+    double * mat_ptr = REAL(r_mat);
+
+    // --- try true batch with pooled embeddings (n_texts > 1) ---
+    bool use_pooled = (n_texts > 1);
+    if (use_pooled) {
+        struct llama_batch batch = llama_batch_init(total_tokens, 0, n_texts);
+        int pos = 0;
+        for (int s = 0; s < n_texts; s++) {
+            for (int t = 0; t < (int) all_tokens[s].size(); t++) {
+                batch.token[pos]      = all_tokens[s][t];
+                batch.pos[pos]        = (llama_pos) t;
+                batch.n_seq_id[pos]   = 1;
+                batch.seq_id[pos][0]  = (llama_seq_id) s;
+                batch.logits[pos]     = (t == (int) all_tokens[s].size() - 1) ? 1 : 0;
+                pos++;
+            }
+        }
+        batch.n_tokens = total_tokens;
+
+        llama_memory_clear(llama_get_memory(ctx), true);
+        int ret = llama_decode(ctx, batch);
+        llama_batch_free(batch);
+
+        if (ret == 0) {
+            llama_synchronize(ctx);
+            // Try pooled extraction
+            float * emb0 = llama_get_embeddings_seq(ctx, 0);
+            if (emb0) {
+                // pooled works — extract all
+                for (int j = 0; j < n_embd; j++)
+                    mat_ptr[0 + j * n_texts] = (double) emb0[j];
+                for (int s = 1; s < n_texts; s++) {
+                    float * emb = llama_get_embeddings_seq(ctx, (llama_seq_id) s);
+                    if (!emb) {
+                        use_pooled = false;
+                        break;
+                    }
+                    for (int j = 0; j < n_embd; j++)
+                        mat_ptr[s + j * n_texts] = (double) emb[j];
+                }
+                if (use_pooled) {
+                    UNPROTECT(1);
+                    llama_set_embeddings(ctx, false);
+                    return r_mat;
+                }
+            } else {
+                use_pooled = false;
+            }
+        } else {
+            use_pooled = false;
+        }
+    }
+
+    // --- fallback: sequential decode, one text at a time ---
+    std::vector<float> tmp(n_embd);
+    for (int s = 0; s < n_texts; s++) {
+        const char * text = CHAR(STRING_ELT(r_texts, s));
+        embed_single(ctx, vocab, text, tmp.data(), n_embd, s);
+        for (int j = 0; j < n_embd; j++)
+            mat_ptr[s + j * n_texts] = (double) tmp[j];
+    }
+
+    UNPROTECT(1);
+    llama_set_embeddings(ctx, false);
+    return r_mat;
+}
+
 // ============================================================
 // Chat templates
 // ============================================================
@@ -1037,6 +1169,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"r_llama_generate",              (DL_FUNC) &r_llama_generate,              17},
     // Embeddings & Logits
     {"r_llama_embeddings",            (DL_FUNC) &r_llama_embeddings,            2},
+    {"r_llama_embed_batch",           (DL_FUNC) &r_llama_embed_batch,           2},
     {"r_llama_get_logits",            (DL_FUNC) &r_llama_get_logits,            1},
     // Memory / KV Cache
     {"r_llama_memory_clear",          (DL_FUNC) &r_llama_memory_clear,          1},
