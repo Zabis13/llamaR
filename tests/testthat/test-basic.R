@@ -572,6 +572,96 @@ test_that("llama_encode returns integer on encoder-decoder model", {
 # GPU: batch_init + encode on GPU context
 # ============================================================
 
+# ============================================================
+# embed_llamar
+# ============================================================
+
+test_that("embed_llamar partial application returns a function", {
+    skip_if_no_model()
+
+    fn <- embed_llamar(model = shared_model)
+    expect_true(is.function(fn))
+})
+
+test_that("embed_llamar partial application produces list of vectors", {
+    skip_if_no_model()
+
+    fn <- embed_llamar(model = shared_model, n_ctx = 256L, n_threads = 2L)
+    result <- fn(c("hello", "world"))
+
+    expect_true(is.list(result))
+    expect_equal(length(result), 2L)
+    expect_true(is.numeric(result[[1]]))
+    expect_equal(length(result[[1]]), shared_info$n_embd)
+})
+
+test_that("embed_llamar direct call returns matrix", {
+    skip_if_no_model()
+
+    mat <- embed_llamar(c("hello", "world"), model = shared_model,
+                        n_ctx = 256L, n_threads = 2L)
+
+    expect_true(is.matrix(mat))
+    expect_equal(nrow(mat), 2L)
+    expect_equal(ncol(mat), shared_info$n_embd)
+})
+
+test_that("embed_llamar normalizes by default", {
+    skip_if_no_model()
+
+    mat <- embed_llamar("hello", model = shared_model,
+                        n_ctx = 256L, n_threads = 2L)
+    norm <- sqrt(sum(mat[1, ]^2))
+    expect_equal(norm, 1.0, tolerance = 1e-6)
+})
+
+test_that("embed_llamar normalize=FALSE skips normalization", {
+    skip_if_no_model()
+
+    mat <- embed_llamar("hello", model = shared_model,
+                        n_ctx = 256L, n_threads = 2L, normalize = FALSE)
+    norm <- sqrt(sum(mat[1, ]^2))
+    # raw embeddings are unlikely to have unit norm
+    expect_true(is.numeric(mat))
+})
+
+test_that("embed_llamar with data.frame returns data.frame with embedding column", {
+    skip_if_no_model()
+
+    df <- data.frame(text = c("hello", "world"), id = 1:2)
+    result <- embed_llamar(df, model = shared_model,
+                           n_ctx = 256L, n_threads = 2L)
+
+    expect_true(is.data.frame(result))
+    expect_true("embedding" %in% names(result))
+    expect_true("id" %in% names(result))
+    expect_equal(nrow(result), 2L)
+    expect_true(is.list(result$embedding))
+    expect_equal(length(result$embedding[[1]]), shared_info$n_embd)
+})
+
+test_that("embed_llamar errors on data.frame without text column", {
+    skip_if_no_model()
+
+    df <- data.frame(content = "hello")
+    expect_error(embed_llamar(df, model = shared_model),
+                 "text")
+})
+
+test_that("embed_llamar with model path loads and frees model", {
+    skip_if_no_model()
+
+    mat <- embed_llamar("hello", model = MODEL_PATH,
+                        n_ctx = 256L, n_threads = 2L)
+    expect_true(is.matrix(mat))
+    expect_equal(nrow(mat), 1L)
+    expect_equal(ncol(mat), shared_info$n_embd)
+})
+
+# ============================================================
+# GPU: batch_init + encode on GPU context
+# ============================================================
+
 test_that("batch_init works with GPU context loaded", {
     skip_if_no_model()
     skip_if(!llama_supports_gpu(), "GPU not available")

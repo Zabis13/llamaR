@@ -31,6 +31,11 @@
 - [x] `llama_hf_cache_info()` — информация о кэше
 - [x] `llama_hf_cache_clear()` — очистка кэша
 
+### R Interface — ragnar / ellmer Integration
+- [x] `embed_llamar()` — embedding-провайдер для `ragnar_store_create(embed = ...)`
+- [ ] `llama_embed_batch()` — батчевый embed списка строк
+- [ ] `chat_llamar()` — ellmer::Chat-совместимый объект для `ragnar_register_tool_retrieve()`
+
 ### Sampling
 - [x] Temperature, top_k, top_p через параметры `llama_generate()`
 - [x] Greedy decoding при `temp = 0`
