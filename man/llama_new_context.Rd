@@ -4,7 +4,7 @@
 \alias{llama_new_context}
 \title{Create an inference context}
 \usage{
-llama_new_context(model, n_ctx = 2048L, n_threads = 4L)
+llama_new_context(model, n_ctx = 2048L, n_threads = 4L, embedding = FALSE)
 }
 \arguments{
 \item{model}{Model handle returned by [llama_load_model]}
@@ -12,6 +12,11 @@ llama_new_context(model, n_ctx = 2048L, n_threads = 4L)
 \item{n_ctx}{Context window size (number of tokens). 0 means use the model's trained value.}
 
 \item{n_threads}{Number of CPU threads to use}
+
+\item{embedding}{Logical; if \code{TRUE}, create context in embedding mode.
+This enables embedding output and disables causal attention, suitable for
+embedding models (e.g. nomic-embed, bge). When \code{TRUE},
+\code{\link{llama_embed_batch}} uses efficient pooled batch decode.}
 }
 \value{
 An external pointer (class \code{externalptr}) wrapping the inference
@@ -29,5 +34,9 @@ ctx <- llama_new_context(model, n_ctx = 4096L, n_threads = 8L)
 # ... use context for generation ...
 llama_free_context(ctx)
 llama_free_model(model)
+
+# Embedding mode
+emb_ctx <- llama_new_context(model, n_ctx = 512L, embedding = TRUE)
+mat <- llama_embed_batch(emb_ctx, c("hello", "world"))
 }
 }

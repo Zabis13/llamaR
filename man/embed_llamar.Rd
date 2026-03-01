@@ -10,6 +10,7 @@ embed_llamar(
   n_gpu_layers = 0L,
   n_ctx = 512L,
   n_threads = parallel::detectCores(),
+  embedding = FALSE,
   normalize = TRUE
 )
 }
@@ -28,6 +29,10 @@ typical for embedding models. Ignored when \code{model} is an already-loaded han
 
 \item{n_threads}{Number of CPU threads. Ignored when \code{model} is an
 already-loaded handle.}
+
+\item{embedding}{Logical; if \code{TRUE}, use pooled batch decode (efficient for
+true embedding models like nomic-embed, bge). If \code{FALSE} (default),
+use sequential last-token decode (works with any model).}
 
 \item{normalize}{Logical; if \code{TRUE} (default), L2-normalize each embedding vector.}
 }

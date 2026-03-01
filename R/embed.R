@@ -13,6 +13,9 @@
 #'   typical for embedding models. Ignored when \code{model} is an already-loaded handle.
 #' @param n_threads Number of CPU threads. Ignored when \code{model} is an
 #'   already-loaded handle.
+#' @param embedding Logical; if \code{TRUE}, use pooled batch decode (efficient for
+#'   true embedding models like nomic-embed, bge). If \code{FALSE} (default),
+#'   use sequential last-token decode (works with any model).
 #' @param normalize Logical; if \code{TRUE} (default), L2-normalize each embedding vector.
 #'
 #' @return
@@ -46,6 +49,7 @@ embed_llamar <- function(x,
                          n_gpu_layers = 0L,
                          n_ctx = 512L,
                          n_threads = parallel::detectCores(),
+                         embedding = FALSE,
                          normalize = TRUE) {
 
     # -- partial application: return a closure for ragnar ----------------------
@@ -58,6 +62,7 @@ embed_llamar <- function(x,
         force(n_gpu_layers)
         force(n_ctx)
         force(n_threads)
+        force(embedding)
         force(normalize)
 
         embed_fn <- function(x) {
@@ -70,8 +75,8 @@ embed_llamar <- function(x,
                 }
                 env$ctx <- llama_new_context(env$model_ptr,
                                              n_ctx = n_ctx,
-                                             n_threads = n_threads)
-                llama_set_causal_attn(env$ctx, FALSE)
+                                             n_threads = n_threads,
+                                             embedding = embedding)
             }
             mat <- .embed_texts(env$ctx, x, normalize)
             asplit(mat, 1)
@@ -93,7 +98,8 @@ embed_llamar <- function(x,
     if (is.character(model)) {
         own_model <- TRUE
         model_ptr <- llama_load_model(model, n_gpu_layers = n_gpu_layers)
-        ctx <- llama_new_context(model_ptr, n_ctx = n_ctx, n_threads = n_threads)
+        ctx <- llama_new_context(model_ptr, n_ctx = n_ctx, n_threads = n_threads,
+                                 embedding = embedding)
         on.exit({
             llama_free_context(ctx)
             llama_free_model(model_ptr)
@@ -101,10 +107,10 @@ embed_llamar <- function(x,
     } else {
         own_model <- FALSE
         model_ptr <- model
-        ctx <- llama_new_context(model_ptr, n_ctx = n_ctx, n_threads = n_threads)
+        ctx <- llama_new_context(model_ptr, n_ctx = n_ctx, n_threads = n_threads,
+                                 embedding = embedding)
         on.exit(llama_free_context(ctx))
     }
-    llama_set_causal_attn(ctx, FALSE)
 
     mat <- .embed_texts(ctx, texts, normalize)
 

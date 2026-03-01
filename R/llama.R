@@ -139,6 +139,10 @@ llama_model_info <- function(model) {
 #' @param model Model handle returned by [llama_load_model]
 #' @param n_ctx Context window size (number of tokens). 0 means use the model's trained value.
 #' @param n_threads Number of CPU threads to use
+#' @param embedding Logical; if \code{TRUE}, create context in embedding mode.
+#'   This enables embedding output and disables causal attention, suitable for
+#'   embedding models (e.g. nomic-embed, bge). When \code{TRUE},
+#'   \code{\link{llama_embed_batch}} uses efficient pooled batch decode.
 #' @return An external pointer (class \code{externalptr}) wrapping the inference
 #'   context. This handle is required by generation, tokenization, and embedding
 #'   functions. Freed automatically by the garbage collector or manually via
@@ -151,9 +155,14 @@ llama_model_info <- function(model) {
 #' # ... use context for generation ...
 #' llama_free_context(ctx)
 #' llama_free_model(model)
+#'
+#' # Embedding mode
+#' emb_ctx <- llama_new_context(model, n_ctx = 512L, embedding = TRUE)
+#' mat <- llama_embed_batch(emb_ctx, c("hello", "world"))
 #' }
-llama_new_context <- function(model, n_ctx = 2048L, n_threads = 4L) {
-    .Call("r_llama_new_context", model, as.integer(n_ctx), as.integer(n_threads))
+llama_new_context <- function(model, n_ctx = 2048L, n_threads = 4L, embedding = FALSE) {
+    .Call("r_llama_new_context", model, as.integer(n_ctx), as.integer(n_threads),
+          as.logical(embedding))
 }
 
 #' Free an inference context
