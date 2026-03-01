@@ -154,25 +154,43 @@ extern "C" SEXP r_llama_model_info(SEXP r_model) {
 // Context: new / free
 // ============================================================
 
-extern "C" SEXP r_llama_new_context(SEXP r_model, SEXP r_n_ctx, SEXP r_n_threads) {
+extern "C" SEXP r_llama_new_context(SEXP r_model, SEXP r_n_ctx, SEXP r_n_threads,
+                                    SEXP r_embedding) {
     llama_model * model = (llama_model *) R_ExternalPtrAddr(r_model);
     if (!model) Rf_error("llamaR: invalid model pointer");
+
+    bool embedding = LOGICAL(r_embedding)[0];
 
     struct llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx            = (uint32_t) INTEGER(r_n_ctx)[0];
     cparams.n_threads        = INTEGER(r_n_threads)[0];
     cparams.n_threads_batch  = INTEGER(r_n_threads)[0];
+    cparams.embeddings       = embedding;
 
     llama_context * ctx = llama_init_from_model(model, cparams);
     if (!ctx) {
         Rf_error("llamaR: failed to create context");
     }
 
-    // prot = r_model keeps the model ExternalPtr alive as long as ctx exists
-    SEXP result = PROTECT(R_MakeExternalPtr(ctx, R_NilValue, r_model));
+    if (embedding) {
+        llama_set_causal_attn(ctx, false);
+    }
+
+    // tag = embedding flag, prot = r_model (keeps model alive)
+    SEXP tag = PROTECT(Rf_ScalarLogical(embedding));
+    SEXP result = PROTECT(R_MakeExternalPtr(ctx, tag, r_model));
     R_RegisterCFinalizer(result, context_finalizer);
-    UNPROTECT(1);
+    UNPROTECT(2);
     return result;
+}
+
+// Helper: check if context was created in embedding mode
+static bool ctx_is_embedding(SEXP r_ctx) {
+    SEXP tag = R_ExternalPtrTag(r_ctx);
+    if (tag != R_NilValue && TYPEOF(tag) == LGLSXP) {
+        return LOGICAL(tag)[0];
+    }
+    return false;
 }
 
 extern "C" SEXP r_llama_free_context(SEXP r_ctx) {
@@ -468,10 +486,12 @@ static void embed_single(llama_context * ctx, const llama_vocab * vocab,
     memcpy(out, emb, n_embd * sizeof(float));
 }
 
-// Batch embeddings: multiple texts, tries pooled batch first, falls back to sequential
+// Batch embeddings: pooled path (embedding=TRUE) or sequential (embedding=FALSE)
 extern "C" SEXP r_llama_embed_batch(SEXP r_ctx, SEXP r_texts) {
     llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
     if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    bool embedding = ctx_is_embedding(r_ctx);
 
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -484,27 +504,21 @@ extern "C" SEXP r_llama_embed_batch(SEXP r_ctx, SEXP r_texts) {
         return r_mat;
     }
 
-    llama_set_embeddings(ctx, true);
-
-    // --- tokenize all texts ---
+    // tokenize all texts
     std::vector<std::vector<llama_token>> all_tokens(n_texts);
     int total_tokens = 0;
     for (int s = 0; s < n_texts; s++) {
         const char * text = CHAR(STRING_ELT(r_texts, s));
-        if (tokenize_text(vocab, text, all_tokens[s]) < 0) {
-            llama_set_embeddings(ctx, false);
+        if (tokenize_text(vocab, text, all_tokens[s]) < 0)
             Rf_error("llamaR: tokenization failed for text %d", s + 1);
-        }
         total_tokens += (int) all_tokens[s].size();
     }
 
-    // Allocate result matrix (column-major)
     SEXP r_mat = PROTECT(Rf_allocMatrix(REALSXP, n_texts, n_embd));
     double * mat_ptr = REAL(r_mat);
 
-    // --- try true batch with pooled embeddings (n_texts > 1) ---
-    bool use_pooled = (n_texts > 1);
-    if (use_pooled) {
+    if (embedding) {
+        // --- pooled batch: one decode for all texts ---
         struct llama_batch batch = llama_batch_init(total_tokens, 0, n_texts);
         int pos = 0;
         for (int s = 0; s < n_texts; s++) {
@@ -522,48 +536,35 @@ extern "C" SEXP r_llama_embed_batch(SEXP r_ctx, SEXP r_texts) {
         llama_memory_clear(llama_get_memory(ctx), true);
         int ret = llama_decode(ctx, batch);
         llama_batch_free(batch);
-
-        if (ret == 0) {
-            llama_synchronize(ctx);
-            // Try pooled extraction
-            float * emb0 = llama_get_embeddings_seq(ctx, 0);
-            if (emb0) {
-                // pooled works — extract all
-                for (int j = 0; j < n_embd; j++)
-                    mat_ptr[0 + j * n_texts] = (double) emb0[j];
-                for (int s = 1; s < n_texts; s++) {
-                    float * emb = llama_get_embeddings_seq(ctx, (llama_seq_id) s);
-                    if (!emb) {
-                        use_pooled = false;
-                        break;
-                    }
-                    for (int j = 0; j < n_embd; j++)
-                        mat_ptr[s + j * n_texts] = (double) emb[j];
-                }
-                if (use_pooled) {
-                    UNPROTECT(1);
-                    llama_set_embeddings(ctx, false);
-                    return r_mat;
-                }
-            } else {
-                use_pooled = false;
-            }
-        } else {
-            use_pooled = false;
+        if (ret != 0) {
+            UNPROTECT(1);
+            Rf_error("llamaR: batch embedding decode failed (code %d)", ret);
         }
-    }
+        llama_synchronize(ctx);
 
-    // --- fallback: sequential decode, one text at a time ---
-    std::vector<float> tmp(n_embd);
-    for (int s = 0; s < n_texts; s++) {
-        const char * text = CHAR(STRING_ELT(r_texts, s));
-        embed_single(ctx, vocab, text, tmp.data(), n_embd, s);
-        for (int j = 0; j < n_embd; j++)
-            mat_ptr[s + j * n_texts] = (double) tmp[j];
+        for (int s = 0; s < n_texts; s++) {
+            float * emb = llama_get_embeddings_seq(ctx, (llama_seq_id) s);
+            if (!emb) {
+                UNPROTECT(1);
+                Rf_error("llamaR: pooled embeddings NULL for seq %d", s);
+            }
+            for (int j = 0; j < n_embd; j++)
+                mat_ptr[s + j * n_texts] = (double) emb[j];
+        }
+    } else {
+        // --- sequential: one decode per text, last-token embedding ---
+        llama_set_embeddings(ctx, true);
+        std::vector<float> tmp(n_embd);
+        for (int s = 0; s < n_texts; s++) {
+            const char * text = CHAR(STRING_ELT(r_texts, s));
+            embed_single(ctx, vocab, text, tmp.data(), n_embd, s);
+            for (int j = 0; j < n_embd; j++)
+                mat_ptr[s + j * n_texts] = (double) tmp[j];
+        }
+        llama_set_embeddings(ctx, false);
     }
 
     UNPROTECT(1);
-    llama_set_embeddings(ctx, false);
     return r_mat;
 }
 
@@ -1151,7 +1152,7 @@ static const R_CallMethodDef CallEntries[] = {
     // Vocabulary
     {"r_llama_vocab_info",            (DL_FUNC) &r_llama_vocab_info,            1},
     // Context
-    {"r_llama_new_context",           (DL_FUNC) &r_llama_new_context,           3},
+    {"r_llama_new_context",           (DL_FUNC) &r_llama_new_context,           4},
     {"r_llama_free_context",          (DL_FUNC) &r_llama_free_context,          1},
     {"r_llama_n_ctx",                 (DL_FUNC) &r_llama_n_ctx,                 1},
     {"r_llama_set_n_threads",         (DL_FUNC) &r_llama_set_n_threads,         3},

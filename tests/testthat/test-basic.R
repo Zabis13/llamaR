@@ -579,9 +579,9 @@ test_that("llama_encode returns integer on encoder-decoder model", {
 test_that("llama_embed_batch returns matrix with correct dimensions", {
     skip_if_no_model()
 
+    # embedding=FALSE: sequential last-token decode (works on generative models)
     ctx <- llama_new_context(shared_model, n_ctx = 256L, n_threads = 2L)
     on.exit(llama_free_context(ctx))
-    llama_set_causal_attn(ctx, FALSE)
 
     mat <- llama_embed_batch(ctx, c("hello", "world", "test"))
 
@@ -601,7 +601,6 @@ test_that("llama_embed_batch single text matches llama_embeddings", {
 
     ctx2 <- llama_new_context(shared_model, n_ctx = 256L, n_threads = 2L)
     on.exit(llama_free_context(ctx2), add = TRUE)
-    llama_set_causal_attn(ctx2, FALSE)
 
     mat <- llama_embed_batch(ctx2, "hello")
 
