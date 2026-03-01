@@ -9,9 +9,11 @@ The package supports GPU acceleration via Vulkan, and automatically falls back t
 - Load and unload models in GGUF format (`llama_load_model`, `llama_free_model`)
 - Create and free contexts (`llama_new_context`, `llama_free_context`)
 - Tokenization, detokenization and text generation (`llama_tokenize`, `llama_detokenize`, `llama_generate`)
-- Embedding extraction (`llama_embeddings`)
+- Embedding extraction: single (`llama_embeddings`), batch (`llama_embed_batch`), ragnar-compatible (`embed_llamar`)
 - Hugging Face integration: download and cache models (`llama_hf_download`, `llama_load_model_hf`, etc.)
 - Encoder-decoder model support (T5, BART) via `llama_encode`
+- Explicit backend/device selection and multi-GPU split (`llama_load_model(devices = ...)`)
+- NUMA optimization (`llama_numa_init`)
 
 ## GPU and CPU Support
 
@@ -112,6 +114,9 @@ model <- llama_load_model("model.gguf", n_gpu_layers = -1L)
 # Partial GPU offload (first 20 layers)
 model <- llama_load_model("model.gguf", n_gpu_layers = 20L)
 
+# Explicit device selection (see llama_backend_devices())
+model <- llama_load_model("model.gguf", n_gpu_layers = -1L, devices = "Vulkan0")
+
 # Check GPU availability
 if (llama_supports_gpu()) {
   message("GPU available")
@@ -185,12 +190,60 @@ text <- llama_detokenize(ctx, tokens)
 ### Embeddings
 
 ```r
+# Single text embedding
 emb1 <- llama_embeddings(ctx, "machine learning")
 emb2 <- llama_embeddings(ctx, "artificial intelligence")
 
 # Cosine similarity
 similarity <- sum(emb1 * emb2) / (sqrt(sum(emb1^2)) * sqrt(sum(emb2^2)))
 cat("Similarity:", similarity, "\n")
+
+# Batch embeddings (matrix output)
+ctx <- llama_new_context(model, n_ctx = 512L, embedding = TRUE)
+mat <- llama_embed_batch(ctx, c("hello world", "foo bar", "test"))
+# mat is a 3 x n_embd matrix
+```
+
+### ragnar Integration
+
+Use `embed_llamar()` as an embedding provider for [ragnar](https://ragnar.tidyverse.org/):
+
+```r
+library(ragnar)
+
+# Create store with local embedding model
+store <- ragnar_store_create(
+  "my_store",
+  embed = embed_llamar(
+    model = "nomic-embed-text-v1.5.Q8_0.gguf",
+    n_gpu_layers = -1,
+    embedding = TRUE
+  )
+)
+
+# Insert and retrieve documents as usual
+ragnar_store_insert(store, documents)
+ragnar_retrieve(store, "search query")
+```
+
+### Backend and Device Selection
+
+```r
+# List available devices
+llama_backend_devices()
+#>         name           description  type
+#> 1 CPU        CPU (threads: 16)      cpu
+#> 2 Vulkan0    NVIDIA GeForce RTX 4090 gpu
+
+# Load model on specific device
+model <- llama_load_model("model.gguf", n_gpu_layers = -1, devices = "Vulkan0")
+
+# CPU-only (even if GPU is available)
+model <- llama_load_model("model.gguf", devices = "cpu")
+
+# Multi-GPU split
+model <- llama_load_model("model.gguf", n_gpu_layers = -1,
+                          devices = c("Vulkan0", "Vulkan1"))
 ```
 
 ### LoRA Adapters

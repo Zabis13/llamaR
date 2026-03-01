@@ -16,7 +16,11 @@ No return value, called for side effects.
 Resets the timing and token count statistics for the context.
 }
 \examples{
-if (FALSE) {
+\dontrun{
+# Reset counters before benchmarking a specific generation
 llama_perf_reset(ctx)
+result <- llama_generate(ctx, "Benchmark prompt", max_new_tokens = 100L)
+perf <- llama_perf(ctx)
+cat("Generation:", perf$n_eval / (perf$t_eval_ms / 1000), "tok/s\n")
 }
 }

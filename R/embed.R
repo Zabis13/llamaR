@@ -30,7 +30,7 @@
 #'
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' # --- Partial application for ragnar ---
 #' store <- ragnar_store_create(
 #'   "my_store",

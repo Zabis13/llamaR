@@ -31,7 +31,11 @@ llama_set_verbosity <- function(level) {
 #'   (0 = silent, 1 = errors only, 2 = normal, 3 = verbose).
 #' @export
 #' @examples
-#' llama_get_verbosity()
+#' # Save current level, suppress output, then restore
+#' old <- llama_get_verbosity()
+#' llama_set_verbosity(0)
+#' # ... noisy operations ...
+#' llama_set_verbosity(old)
 llama_get_verbosity <- function() {
     .Call("r_llama_get_verbosity")
 }
@@ -55,10 +59,73 @@ llama_supports_gpu <- function() {
     .Call("r_llama_supports_gpu")
 }
 
+#' Get current time in microseconds
+#'
+#' @return A numeric scalar with the current time in microseconds.
+#' @export
+#' @examples
+#' # Measure elapsed time for an operation
+#' t0 <- llama_time_us()
+#' Sys.sleep(0.01)
+#' elapsed_ms <- (llama_time_us() - t0) / 1000
+#' cat("Elapsed:", round(elapsed_ms, 1), "ms\n")
+llama_time_us <- function() {
+    .Call("r_llama_time_us")
+}
+
+#' Initialize NUMA optimization
+#'
+#' Call once for better performance on NUMA systems.
+#'
+#' @param strategy NUMA strategy: \code{"disabled"} (default), \code{"distribute"},
+#'   \code{"isolate"}, \code{"numactl"}, or \code{"mirror"}.
+#' @return No return value, called for side effects.
+#' @export
+#' @examples
+#' \dontrun{
+#' # On multi-socket servers, distribute memory across NUMA nodes
+#' # for better memory bandwidth during inference
+#' llama_numa_init("distribute")
+#'
+#' # Call before loading any models — affects all subsequent allocations
+#' model <- llama_load_model("model.gguf", n_gpu_layers = 0L)
+#' }
+llama_numa_init <- function(strategy = "disabled") {
+    strategies <- c(disabled = 0L, distribute = 1L, isolate = 2L,
+                    numactl = 3L, mirror = 4L)
+    if (!strategy %in% names(strategies))
+        stop("llamaR: invalid NUMA strategy '", strategy,
+             "'. Valid: ", paste(names(strategies), collapse = ", "))
+    .Call("r_llama_numa_init", strategies[[strategy]])
+    invisible(NULL)
+}
+
+#' List available backend devices
+#'
+#' Returns a data.frame of all compute devices (CPU, GPU, etc.) detected
+#' by the ggml backend. Use device names from this list in the \code{devices}
+#' parameter of \code{\link{llama_load_model}}.
+#'
+#' @return A data.frame with columns \code{name}, \code{description}, and
+#'   \code{type} (one of \code{"cpu"}, \code{"gpu"}, \code{"igpu"}, \code{"accel"}).
+#' @export
+#' @examples
+#' # List available compute devices and pick GPU names for llama_load_model()
+#' devs <- llama_backend_devices()
+#' print(devs)
+#' gpu_names <- devs$name[devs$type == "GPU"]
+llama_backend_devices <- function() {
+    .Call("r_llama_backend_devices")
+}
+
 #' Load a GGUF model file
 #'
 #' @param path Path to the .gguf model file
 #' @param n_gpu_layers Number of layers to offload to GPU (0 = CPU only, -1 = all)
+#' @param devices Character vector of device names or types to use for offloading.
+#'   \code{NULL} (default) uses all available devices. Use \code{"cpu"} for CPU-only,
+#'   \code{"gpu"} for first GPU, or specific device names from
+#'   \code{\link{llama_backend_devices}}. Multiple devices enable multi-GPU split.
 #' @return An external pointer (class \code{externalptr}) wrapping the loaded
 #'   model. This handle is required by \code{\link{llama_new_context}},
 #'   \code{\link{llama_model_info}}, and other model-level functions.
@@ -66,20 +133,28 @@ llama_supports_gpu <- function() {
 #'   \code{\link{llama_free_model}}.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' # Load model on CPU only
 #' model <- llama_load_model("model.gguf")
 #'
 #' # Load model with all layers on GPU
 #' model <- llama_load_model("model.gguf", n_gpu_layers = -1L)
 #'
-#' # Load model with first 10 layers on GPU
-#' model <- llama_load_model("model.gguf", n_gpu_layers = 10L)
+#' # Explicit CPU-only backend
+#' model <- llama_load_model("model.gguf", devices = "cpu")
+#'
+#' # Specific GPU device (see llama_backend_devices())
+#' model <- llama_load_model("model.gguf", n_gpu_layers = -1L, devices = "Vulkan0")
+#'
+#' # Multi-GPU: use two devices
+#' model <- llama_load_model("model.gguf", n_gpu_layers = -1L,
+#'                           devices = c("Vulkan0", "Vulkan1"))
 #' }
-llama_load_model <- function(path, n_gpu_layers = 0L) {
+llama_load_model <- function(path, n_gpu_layers = 0L, devices = NULL) {
     stopifnot(is.character(path), length(path) == 1)
     if (!file.exists(path)) stop("llamaR: model file does not exist: ", path)
-    .Call("r_llama_load_model", path, as.integer(n_gpu_layers))
+    if (!is.null(devices)) stopifnot(is.character(devices))
+    .Call("r_llama_load_model", path, as.integer(n_gpu_layers), devices)
 }
 
 #' Free a loaded model
@@ -89,7 +164,7 @@ llama_load_model <- function(path, n_gpu_layers = 0L) {
 #'   associated with the model.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' # ... use model ...
 #' llama_free_model(model)
@@ -116,7 +191,7 @@ llama_free_model <- function(model) {
 #'   - `is_recurrent`: whether the model is recurrent (e.g. Mamba)
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' info <- llama_model_info(model)
 #' cat("Model:", info$desc, "\n")
@@ -149,7 +224,7 @@ llama_model_info <- function(model) {
 #'   \code{\link{llama_free_context}}.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model, n_ctx = 4096L, n_threads = 8L)
 #' # ... use context for generation ...
@@ -172,7 +247,7 @@ llama_new_context <- function(model, n_ctx = 2048L, n_threads = 4L, embedding = 
 #'   associated with the inference context.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model)
 #' # ... use context ...
@@ -191,7 +266,7 @@ llama_free_context <- function(ctx) {
 #' @return An integer vector of token IDs as used by the model's vocabulary.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model)
 #'
@@ -214,7 +289,7 @@ llama_tokenize <- function(ctx, text, add_special = TRUE) {
 #' @return A character scalar containing the decoded text.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model)
 #'
@@ -255,7 +330,7 @@ llama_detokenize <- function(ctx, tokens) {
 #'   original prompt).
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf", n_gpu_layers = -1L)
 #' ctx <- llama_new_context(model, n_ctx = 2048L)
 #'
@@ -308,7 +383,7 @@ llama_generate <- function(ctx, prompt, max_new_tokens = 256L,
 #'   dimension) containing the hidden-state representation of the input text.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model)
 #'
@@ -341,7 +416,7 @@ llama_embeddings <- function(ctx, text) {
 #'   \code{ncol = n_embd}.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("embedding-model.gguf")
 #' ctx <- llama_new_context(model, n_ctx = 2048L)
 #' llama_set_causal_attn(ctx, FALSE)
@@ -352,6 +427,53 @@ llama_embeddings <- function(ctx, text) {
 llama_embed_batch <- function(ctx, texts) {
     stopifnot(is.character(texts))
     .Call("r_llama_embed_batch", ctx, texts)
+}
+
+#' Get embeddings for the i-th token in the batch
+#'
+#' Returns the embedding vector for a specific token position after a decode
+#' call with embeddings enabled. Negative indices count from the end
+#' (-1 = last token).
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param i Integer index of the token (0-based, or negative for reverse indexing)
+#' @return A numeric vector of length \code{n_embd}.
+#' @export
+#' @examples
+#' \dontrun{
+#' model <- llama_load_model("model.gguf")
+#' ctx <- llama_new_context(model)
+#' llama_generate(ctx, "Hello world", max_new_tokens = 1L)
+#'
+#' # Get the embedding of the last decoded token
+#' emb <- llama_get_embeddings_ith(ctx, -1L)
+#' cat("Embedding dim:", length(emb), "\n")
+#' }
+llama_get_embeddings_ith <- function(ctx, i) {
+    .Call("r_llama_get_embeddings_ith", ctx, as.integer(i))
+}
+
+#' Get pooled embeddings for a sequence
+#'
+#' Returns the pooled embedding vector for a given sequence ID after a batch
+#' decode. Only works when the model supports pooling (embedding models).
+#'
+#' @param ctx Context handle returned by [llama_new_context] with
+#'   \code{embedding = TRUE}
+#' @param seq_id Integer sequence ID (0-based)
+#' @return A numeric vector of length \code{n_embd}.
+#' @export
+#' @examples
+#' \dontrun{
+#' # Get pooled embedding for sequence 0 (requires embedding context)
+#' model <- llama_load_model("nomic-embed.gguf")
+#' ctx <- llama_new_context(model, embedding = TRUE)
+#' mat <- llama_embed_batch(ctx, "Hello world")
+#' emb <- llama_get_embeddings_seq(ctx, 0L)
+#' cat("Pooled embedding dim:", length(emb), "\n")
+#' }
+llama_get_embeddings_seq <- function(ctx, seq_id) {
+    .Call("r_llama_get_embeddings_seq", ctx, as.integer(seq_id))
 }
 
 # ============================================================
@@ -369,7 +491,7 @@ llama_embed_batch <- function(ctx, texts) {
 #'   the model does not contain a built-in template.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("llama-3.2-instruct.gguf")
 #' tmpl <- llama_chat_template(model)
 #' cat(tmpl)
@@ -391,7 +513,7 @@ llama_chat_template <- function(model, name = NULL) {
 #'   to be passed to \code{\link{llama_generate}}.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("llama-3.2-instruct.gguf")
 #' tmpl <- llama_chat_template(model)
 #'
@@ -427,7 +549,7 @@ llama_chat_apply_template <- function(messages, template = NULL, add_generation_
 #'   \code{\link{llama_lora_apply}} to activate the adapter.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("base-model.gguf")
 #' lora <- llama_lora_load(model, "fine-tuned-adapter.gguf")
 #'
@@ -455,7 +577,7 @@ llama_lora_load <- function(model, path) {
 #'   for the given context.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("base-model.gguf")
 #' lora <- llama_lora_load(model, "adapter.gguf")
 #' ctx <- llama_new_context(model)
@@ -481,8 +603,10 @@ llama_lora_apply <- function(ctx, lora, scale = 1.0) {
 #'   to this context.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
+#' # Remove a specific adapter while keeping others active
 #' llama_lora_remove(ctx, lora)
+#' result <- llama_generate(ctx, "Without adapter: ", max_new_tokens = 20L)
 #' }
 llama_lora_remove <- function(ctx, lora) {
     .Call("r_llama_lora_remove", ctx, lora)
@@ -497,7 +621,7 @@ llama_lora_remove <- function(ctx, lora) {
 #'   adapters from the context.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' # Apply multiple LoRAs
 #' llama_lora_apply(ctx, lora1)
 #' llama_lora_apply(ctx, lora2)
@@ -523,7 +647,7 @@ llama_lora_clear <- function(ctx) {
 #'   are the corresponding metadata values.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' meta <- llama_model_meta(model)
 #' print(meta)
@@ -540,7 +664,7 @@ llama_model_meta <- function(model) {
 #'   does not exist.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' llama_model_meta_val(model, "general.name")
 #' llama_model_meta_val(model, "general.architecture")
@@ -567,7 +691,7 @@ llama_model_meta_val <- function(model, key) {
 #'   A value of -1 means the token is not defined by the model.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' vocab <- llama_vocab_info(model)
 #' cat("BOS token:", vocab["bos"], "\n")
@@ -590,7 +714,7 @@ llama_vocab_info <- function(model) {
 #' @return No return value, called for side effects.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model)
 #' llama_set_threads(ctx, n_threads = 8L)
@@ -611,7 +735,7 @@ llama_set_threads <- function(ctx, n_threads, n_threads_batch = n_threads) {
 #' @return No return value, called for side effects.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model)
 #' llama_set_causal_attn(ctx, FALSE)  # for embeddings
@@ -627,7 +751,7 @@ llama_set_causal_attn <- function(ctx, causal) {
 #' @return An integer scalar: the context window size (number of tokens).
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model, n_ctx = 4096L)
 #' llama_n_ctx(ctx)  # 4096
@@ -649,8 +773,10 @@ llama_n_ctx <- function(ctx) {
 #' @return No return value, called for side effects.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
+#' # Clear the KV cache to start a fresh conversation
 #' llama_memory_clear(ctx)
+#' result <- llama_generate(ctx, "New topic: ", max_new_tokens = 50L)
 #' }
 llama_memory_clear <- function(ctx) {
     .Call("r_llama_memory_clear", ctx)
@@ -669,7 +795,7 @@ llama_memory_clear <- function(ctx) {
 #' @return A logical scalar: \code{TRUE} if tokens were successfully removed.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' # Remove all tokens from sequence 0
 #' llama_memory_seq_rm(ctx, seq_id = 0L, p0 = -1L, p1 = -1L)
 #' }
@@ -690,7 +816,7 @@ llama_memory_seq_rm <- function(ctx, seq_id, p0 = -1L, p1 = -1L) {
 #' @return No return value, called for side effects.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' # Copy sequence 0 to sequence 1
 #' llama_memory_seq_cp(ctx, seq_id_src = 0L, seq_id_dst = 1L,
 #'                     p0 = -1L, p1 = -1L)
@@ -710,7 +836,7 @@ llama_memory_seq_cp <- function(ctx, seq_id_src, seq_id_dst, p0 = -1L, p1 = -1L)
 #' @return No return value, called for side effects.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' llama_memory_seq_keep(ctx, seq_id = 0L)
 #' }
 llama_memory_seq_keep <- function(ctx, seq_id) {
@@ -731,7 +857,7 @@ llama_memory_seq_keep <- function(ctx, seq_id) {
 #' @return No return value, called for side effects.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' # Shift positions left by 100 for context window management
 #' llama_memory_seq_add(ctx, seq_id = 0L, p0 = 100L, p1 = -1L, delta = -100L)
 #' }
@@ -751,7 +877,7 @@ llama_memory_seq_add <- function(ctx, seq_id, p0, p1, delta) {
 #' @return A named integer vector with elements \code{min} and \code{max}.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' range <- llama_memory_seq_pos_range(ctx, seq_id = 0L)
 #' cat("Positions:", range["min"], "to", range["max"], "\n")
 #' }
@@ -765,7 +891,7 @@ llama_memory_seq_pos_range <- function(ctx, seq_id) {
 #' @return A logical scalar: \code{TRUE} if the memory supports position shifting.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' if (llama_memory_can_shift(ctx)) {
 #'   message("Context shifting is supported")
 #' }
@@ -788,7 +914,7 @@ llama_memory_can_shift <- function(ctx) {
 #' @return A logical scalar: \code{TRUE} on success (errors on failure).
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' llama_state_save(ctx, "state.bin")
 #' }
 llama_state_save <- function(ctx, path) {
@@ -805,7 +931,7 @@ llama_state_save <- function(ctx, path) {
 #' @return A logical scalar: \code{TRUE} on success (errors on failure).
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' llama_state_load(ctx, "state.bin")
 #' # Continue generation from saved state
 #' result <- llama_generate(ctx, "")
@@ -829,7 +955,7 @@ llama_state_load <- function(ctx, path) {
 #' @return A numeric vector of length \code{n_vocab} containing the logits.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' ctx <- llama_new_context(model)
 #' result <- llama_generate(ctx, "The capital of France is", max_new_tokens = 1L)
@@ -860,7 +986,7 @@ llama_get_logits <- function(ctx) {
 #'   - `n_reused`: number of reused compute graphs
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
 #' result <- llama_generate(ctx, "Hello world")
 #' perf <- llama_perf(ctx)
 #' cat("Prompt speed:", perf$n_p_eval / (perf$t_p_eval_ms / 1000), "tok/s\n")
@@ -878,8 +1004,12 @@ llama_perf <- function(ctx) {
 #' @return No return value, called for side effects.
 #' @export
 #' @examples
-#' if (FALSE) {
+#' \dontrun{
+#' # Reset counters before benchmarking a specific generation
 #' llama_perf_reset(ctx)
+#' result <- llama_generate(ctx, "Benchmark prompt", max_new_tokens = 100L)
+#' perf <- llama_perf(ctx)
+#' cat("Generation:", perf$n_eval / (perf$t_eval_ms / 1000), "tok/s\n")
 #' }
 llama_perf_reset <- function(ctx) {
     .Call("r_llama_perf_context_reset", ctx)
@@ -908,7 +1038,10 @@ llama_system_info <- function() {
 #' @return A logical scalar: \code{TRUE} if mmap is supported.
 #' @export
 #' @examples
-#' llama_supports_mmap()
+#' # Check memory-mapping support before loading large models
+#' if (llama_supports_mmap()) {
+#'   message("mmap available — large models will load faster")
+#' }
 llama_supports_mmap <- function() {
     .Call("r_llama_supports_mmap")
 }
@@ -918,7 +1051,10 @@ llama_supports_mmap <- function() {
 #' @return A logical scalar: \code{TRUE} if mlock is supported.
 #' @export
 #' @examples
-#' llama_supports_mlock()
+#' # Check if memory locking is available (prevents swapping model to disk)
+#' if (llama_supports_mlock()) {
+#'   message("mlock available — model weights can be pinned in RAM")
+#' }
 llama_supports_mlock <- function() {
     .Call("r_llama_supports_mlock")
 }
@@ -928,7 +1064,9 @@ llama_supports_mlock <- function() {
 #' @return An integer scalar: the maximum number of compute devices available.
 #' @export
 #' @examples
-#' llama_max_devices()
+#' # Query the maximum number of devices supported by the backend
+#' n <- llama_max_devices()
+#' cat("Max devices:", n, "\n")
 llama_max_devices <- function() {
     .Call("r_llama_max_devices")
 }
@@ -944,7 +1082,9 @@ llama_max_devices <- function() {
 #' @return A character vector of built-in template names.
 #' @export
 #' @examples
-#' llama_chat_builtin_templates()
+#' # See which chat template formats are supported out of the box
+#' templates <- llama_chat_builtin_templates()
+#' head(templates)
 llama_chat_builtin_templates <- function() {
     .Call("r_llama_chat_builtin_templates")
 }
@@ -960,7 +1100,11 @@ llama_chat_builtin_templates <- function() {
 #' \dontrun{
 #' model <- llama_load_model("model.gguf")
 #' ctx   <- llama_new_context(model)
-#' llama_token_to_piece(ctx, 1L)
+#'
+#' # Inspect individual tokens from tokenizer output
+#' tokens <- llama_tokenize(ctx, "Hello world")
+#' pieces <- vapply(tokens, function(t) llama_token_to_piece(ctx, t), "")
+#' cat(paste(pieces, collapse = "|"), "\n")
 #' }
 llama_token_to_piece <- function(ctx, token, special = FALSE) {
     .Call("r_llama_token_to_piece", ctx, as.integer(token), as.logical(special))

@@ -20,7 +20,7 @@ When disabled, the model uses full (bidirectional) attention.
 This is useful for embedding models.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model)
 llama_set_causal_attn(ctx, FALSE)  # for embeddings

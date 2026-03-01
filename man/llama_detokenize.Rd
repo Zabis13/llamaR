@@ -18,7 +18,7 @@ A character scalar containing the decoded text.
 Detokenize token IDs back to text
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model)
 

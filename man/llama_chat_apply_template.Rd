@@ -27,7 +27,7 @@ Formats a conversation using the specified chat template.
 This is essential for instruct/chat models to work correctly.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("llama-3.2-instruct.gguf")
 tmpl <- llama_chat_template(model)
 

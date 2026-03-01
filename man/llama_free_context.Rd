@@ -17,7 +17,7 @@ No return value, called for side effects. Releases the memory
 Free an inference context
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model)
 # ... use context ...

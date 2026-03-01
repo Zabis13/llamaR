@@ -19,7 +19,7 @@ Saves the full context state (including KV cache) to a binary file.
 This allows resuming generation later from the exact same state.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 llama_state_save(ctx, "state.bin")
 }
 }

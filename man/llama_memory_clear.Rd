@@ -17,7 +17,9 @@ Removes all tokens from the KV cache. Call this before starting
 a new generation from scratch.
 }
 \examples{
-if (FALSE) {
+\dontrun{
+# Clear the KV cache to start a fresh conversation
 llama_memory_clear(ctx)
+result <- llama_generate(ctx, "New topic: ", max_new_tokens = 50L)
 }
 }

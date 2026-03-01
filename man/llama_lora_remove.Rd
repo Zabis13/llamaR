@@ -19,7 +19,9 @@ An integer scalar: 0 on success, -1 if the adapter was not applied
 Deactivates a specific LoRA adapter from the context.
 }
 \examples{
-if (FALSE) {
+\dontrun{
+# Remove a specific adapter while keeping others active
 llama_lora_remove(ctx, lora)
+result <- llama_generate(ctx, "Without adapter: ", max_new_tokens = 20L)
 }
 }

@@ -19,7 +19,7 @@ A character scalar with the metadata value, or \code{NULL} if the key
 Get a single model metadata value by key
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("model.gguf")
 llama_model_meta_val(model, "general.name")
 llama_model_meta_val(model, "general.architecture")

@@ -25,7 +25,7 @@ Adds a position delta to all tokens in the given sequence within [p0, p1).
 This is useful for implementing context shifting (sliding window).
 }
 \examples{
-if (FALSE) {
+\dontrun{
 # Shift positions left by 100 for context window management
 llama_memory_seq_add(ctx, seq_id = 0L, p0 = 100L, p1 = -1L, delta = -100L)
 }

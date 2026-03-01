@@ -23,7 +23,7 @@ Removes cached tokens for the given sequence in the position range [p0, p1).
 Use p0 = -1 and p1 = -1 to remove all tokens for the sequence.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 # Remove all tokens from sequence 0
 llama_memory_seq_rm(ctx, seq_id = 0L, p0 = -1L, p1 = -1L)
 }

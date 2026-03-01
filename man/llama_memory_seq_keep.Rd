@@ -18,7 +18,7 @@ No return value, called for side effects.
 Removes all sequences except the specified one from the KV cache.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 llama_memory_seq_keep(ctx, seq_id = 0L)
 }
 }
