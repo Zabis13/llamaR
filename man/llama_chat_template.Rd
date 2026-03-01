@@ -20,7 +20,7 @@ Returns the chat template string embedded in the model file, if any.
 Common templates include ChatML, Llama, Mistral, etc.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("llama-3.2-instruct.gguf")
 tmpl <- llama_chat_template(model)
 cat(tmpl)

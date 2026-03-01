@@ -16,7 +16,7 @@ A logical scalar: \code{TRUE} if the memory supports position shifting.
 Check if the KV cache supports shifting
 }
 \examples{
-if (FALSE) {
+\dontrun{
 if (llama_memory_can_shift(ctx)) {
   message("Context shifting is supported")
 }

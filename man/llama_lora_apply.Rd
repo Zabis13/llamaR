@@ -22,7 +22,7 @@ Activates a loaded LoRA adapter for the given context.
 Multiple LoRA adapters can be applied simultaneously.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("base-model.gguf")
 lora <- llama_lora_load(model, "adapter.gguf")
 ctx <- llama_new_context(model)

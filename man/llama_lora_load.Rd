@@ -21,7 +21,7 @@ Loads a LoRA (Low-Rank Adaptation) adapter file that can be applied
 to modify the model's behavior without changing the base weights.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("base-model.gguf")
 lora <- llama_lora_load(model, "fine-tuned-adapter.gguf")
 

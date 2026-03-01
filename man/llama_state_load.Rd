@@ -18,7 +18,7 @@ A logical scalar: \code{TRUE} on success (errors on failure).
 Restores a previously saved context state (including KV cache).
 }
 \examples{
-if (FALSE) {
+\dontrun{
 llama_state_load(ctx, "state.bin")
 # Continue generation from saved state
 result <- llama_generate(ctx, "")

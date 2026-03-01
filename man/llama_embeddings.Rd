@@ -20,7 +20,7 @@ Runs the model in embeddings mode and returns the hidden-state vector
 of the last token. Note: meaningful only for models that support embeddings.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model)
 

@@ -28,7 +28,7 @@ An external pointer (class \code{externalptr}) wrapping the inference
 Create an inference context
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model, n_ctx = 4096L, n_threads = 8L)
 # ... use context for generation ...

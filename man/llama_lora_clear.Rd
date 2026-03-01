@@ -17,7 +17,7 @@ No return value, called for side effects. Removes all active LoRA
 Deactivates all LoRA adapters from the context, returning to base model behavior.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 # Apply multiple LoRAs
 llama_lora_apply(ctx, lora1)
 llama_lora_apply(ctx, lora2)

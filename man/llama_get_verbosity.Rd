@@ -14,5 +14,9 @@ An integer scalar indicating the current verbosity level
 Get current verbosity level
 }
 \examples{
-llama_get_verbosity()
+# Save current level, suppress output, then restore
+old <- llama_get_verbosity()
+llama_set_verbosity(0)
+# ... noisy operations ...
+llama_set_verbosity(old)
 }

@@ -19,7 +19,7 @@ Returns the minimum and maximum token positions for a given sequence
 in the KV cache.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 range <- llama_memory_seq_pos_range(ctx, seq_id = 0L)
 cat("Positions:", range["min"], "to", range["max"], "\n")
 }

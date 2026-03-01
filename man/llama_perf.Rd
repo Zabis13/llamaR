@@ -23,7 +23,7 @@ Returns timing and count statistics for the current context,
 including prompt processing time, token generation time, and counts.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 result <- llama_generate(ctx, "Hello world")
 perf <- llama_perf(ctx)
 cat("Prompt speed:", perf$n_p_eval / (perf$t_p_eval_ms / 1000), "tok/s\n")

@@ -12,6 +12,8 @@
 #endif
 
 #include "llama.h"
+#include <ggml-backend.h>
+#include <ggml-cpu.h>
 
 // ============================================================
 // Logging control
@@ -88,10 +90,72 @@ extern "C" SEXP r_llama_get_verbosity(void) {
 }
 
 // ============================================================
+// Time / NUMA / Backend devices
+// ============================================================
+
+extern "C" SEXP r_llama_time_us(void) {
+    return Rf_ScalarReal((double) llama_time_us());
+}
+
+extern "C" SEXP r_llama_numa_init(SEXP r_strategy) {
+    ensure_backend_init();
+    int strategy = INTEGER(r_strategy)[0];
+    if (strategy < 0 || strategy >= GGML_NUMA_STRATEGY_COUNT)
+        Rf_error("llamaR: invalid NUMA strategy %d (valid: 0..%d)", strategy,
+                 GGML_NUMA_STRATEGY_COUNT - 1);
+    llama_numa_init((enum ggml_numa_strategy) strategy);
+    return R_NilValue;
+}
+
+extern "C" SEXP r_llama_backend_devices(void) {
+    ensure_backend_init();
+    size_t n = ggml_backend_dev_count();
+
+    SEXP names_vec = PROTECT(Rf_allocVector(STRSXP, (R_xlen_t) n));
+    SEXP descs_vec = PROTECT(Rf_allocVector(STRSXP, (R_xlen_t) n));
+    SEXP types_vec = PROTECT(Rf_allocVector(STRSXP, (R_xlen_t) n));
+
+    for (size_t i = 0; i < n; i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        SET_STRING_ELT(names_vec, (R_xlen_t) i, Rf_mkChar(ggml_backend_dev_name(dev)));
+        SET_STRING_ELT(descs_vec, (R_xlen_t) i, Rf_mkChar(ggml_backend_dev_description(dev)));
+
+        enum ggml_backend_dev_type t = ggml_backend_dev_type(dev);
+        const char * type_str = "unknown";
+        if (t == GGML_BACKEND_DEVICE_TYPE_CPU)   type_str = "cpu";
+        else if (t == GGML_BACKEND_DEVICE_TYPE_GPU)   type_str = "gpu";
+        else if (t == GGML_BACKEND_DEVICE_TYPE_IGPU)  type_str = "igpu";
+        else if (t == GGML_BACKEND_DEVICE_TYPE_ACCEL) type_str = "accel";
+        SET_STRING_ELT(types_vec, (R_xlen_t) i, Rf_mkChar(type_str));
+    }
+
+    // Build data.frame
+    SEXP df = PROTECT(Rf_allocVector(VECSXP, 3));
+    SET_VECTOR_ELT(df, 0, names_vec);
+    SET_VECTOR_ELT(df, 1, descs_vec);
+    SET_VECTOR_ELT(df, 2, types_vec);
+
+    SEXP col_names = PROTECT(Rf_allocVector(STRSXP, 3));
+    SET_STRING_ELT(col_names, 0, Rf_mkChar("name"));
+    SET_STRING_ELT(col_names, 1, Rf_mkChar("description"));
+    SET_STRING_ELT(col_names, 2, Rf_mkChar("type"));
+    Rf_setAttrib(df, R_NamesSymbol, col_names);
+
+    SEXP row_names = PROTECT(Rf_allocVector(INTSXP, 2));
+    INTEGER(row_names)[0] = NA_INTEGER;
+    INTEGER(row_names)[1] = -(int) n;
+    Rf_setAttrib(df, R_RowNamesSymbol, row_names);
+    Rf_setAttrib(df, R_ClassSymbol, Rf_mkString("data.frame"));
+
+    UNPROTECT(6);
+    return df;
+}
+
+// ============================================================
 // Model: load / free / info
 // ============================================================
 
-extern "C" SEXP r_llama_load_model(SEXP r_path, SEXP r_n_gpu_layers) {
+extern "C" SEXP r_llama_load_model(SEXP r_path, SEXP r_n_gpu_layers, SEXP r_devices) {
     ensure_backend_init();
 
     const char * path = CHAR(STRING_ELT(r_path, 0));
@@ -99,6 +163,38 @@ extern "C" SEXP r_llama_load_model(SEXP r_path, SEXP r_n_gpu_layers) {
 
     struct llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = n_gpu_layers;
+
+    // device selection
+    std::vector<ggml_backend_dev_t> devs;
+    if (!Rf_isNull(r_devices)) {
+        int n_devs = Rf_length(r_devices);
+        size_t n_available = ggml_backend_dev_count();
+        for (int i = 0; i < n_devs; i++) {
+            const char * dev_name = CHAR(STRING_ELT(r_devices, i));
+            // try by name first
+            ggml_backend_dev_t dev = ggml_backend_dev_by_name(dev_name);
+            if (!dev) {
+                // try by type keyword: "cpu", "gpu"
+                if (strcmp(dev_name, "cpu") == 0) {
+                    dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+                } else if (strcmp(dev_name, "gpu") == 0) {
+                    dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+                    if (!dev)
+                        dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
+                } else {
+                    // try as numeric index (0-based)
+                    char * endptr;
+                    long idx = strtol(dev_name, &endptr, 10);
+                    if (*endptr == '\0' && idx >= 0 && (size_t) idx < n_available)
+                        dev = ggml_backend_dev_get((size_t) idx);
+                }
+            }
+            if (!dev) Rf_error("llamaR: device not found: '%s'", dev_name);
+            devs.push_back(dev);
+        }
+        devs.push_back(nullptr);  // NULL-terminated
+        mparams.devices = devs.data();
+    }
 
     llama_model * model = llama_model_load_from_file(path, mparams);
     if (!model) {
@@ -450,6 +546,42 @@ extern "C" SEXP r_llama_embeddings(SEXP r_ctx, SEXP r_text) {
     UNPROTECT(1);
 
     llama_set_embeddings(ctx, false);
+    return r_result;
+}
+
+extern "C" SEXP r_llama_get_embeddings_ith(SEXP r_ctx, SEXP r_i) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    int32_t i = INTEGER(r_i)[0];
+    const llama_model * model = llama_get_model(ctx);
+    int n_embd = llama_model_n_embd(model);
+
+    float * emb = llama_get_embeddings_ith(ctx, i);
+    if (!emb) Rf_error("llamaR: embeddings NULL for index %d", i);
+
+    SEXP r_result = PROTECT(Rf_allocVector(REALSXP, n_embd));
+    for (int j = 0; j < n_embd; j++)
+        REAL(r_result)[j] = (double) emb[j];
+    UNPROTECT(1);
+    return r_result;
+}
+
+extern "C" SEXP r_llama_get_embeddings_seq(SEXP r_ctx, SEXP r_seq_id) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    llama_seq_id seq_id = (llama_seq_id) INTEGER(r_seq_id)[0];
+    const llama_model * model = llama_get_model(ctx);
+    int n_embd = llama_model_n_embd(model);
+
+    float * emb = llama_get_embeddings_seq(ctx, seq_id);
+    if (!emb) Rf_error("llamaR: pooled embeddings NULL for seq_id %d (model may not support pooling)", seq_id);
+
+    SEXP r_result = PROTECT(Rf_allocVector(REALSXP, n_embd));
+    for (int j = 0; j < n_embd; j++)
+        REAL(r_result)[j] = (double) emb[j];
+    UNPROTECT(1);
     return r_result;
 }
 
@@ -1139,7 +1271,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"r_llama_set_verbosity",         (DL_FUNC) &r_llama_set_verbosity,         1},
     {"r_llama_get_verbosity",         (DL_FUNC) &r_llama_get_verbosity,         0},
     // Model
-    {"r_llama_load_model",            (DL_FUNC) &r_llama_load_model,            2},
+    {"r_llama_time_us",               (DL_FUNC) &r_llama_time_us,               0},
+    {"r_llama_numa_init",             (DL_FUNC) &r_llama_numa_init,             1},
+    {"r_llama_backend_devices",       (DL_FUNC) &r_llama_backend_devices,       0},
+    {"r_llama_load_model",            (DL_FUNC) &r_llama_load_model,            3},
     {"r_llama_free_model",            (DL_FUNC) &r_llama_free_model,            1},
     {"r_llama_model_info",            (DL_FUNC) &r_llama_model_info,            1},
     {"r_llama_model_size",            (DL_FUNC) &r_llama_model_size,            1},
@@ -1171,6 +1306,8 @@ static const R_CallMethodDef CallEntries[] = {
     // Embeddings & Logits
     {"r_llama_embeddings",            (DL_FUNC) &r_llama_embeddings,            2},
     {"r_llama_embed_batch",           (DL_FUNC) &r_llama_embed_batch,           2},
+    {"r_llama_get_embeddings_ith",    (DL_FUNC) &r_llama_get_embeddings_ith,    2},
+    {"r_llama_get_embeddings_seq",    (DL_FUNC) &r_llama_get_embeddings_seq,    2},
     {"r_llama_get_logits",            (DL_FUNC) &r_llama_get_logits,            1},
     // Memory / KV Cache
     {"r_llama_memory_clear",          (DL_FUNC) &r_llama_memory_clear,          1},

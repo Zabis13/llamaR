@@ -13,5 +13,8 @@ A logical scalar: \code{TRUE} if mmap is supported.
 Check whether memory-mapped file I/O is supported
 }
 \examples{
-llama_supports_mmap()
+# Check memory-mapping support before loading large models
+if (llama_supports_mmap()) {
+  message("mmap available — large models will load faster")
+}
 }

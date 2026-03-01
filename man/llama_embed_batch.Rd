@@ -27,7 +27,7 @@ Requires a model that supports pooled embeddings (e.g. embedding
   automatically disabled during computation.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("embedding-model.gguf")
 ctx <- llama_new_context(model, n_ctx = 2048L)
 llama_set_causal_attn(ctx, FALSE)

@@ -34,7 +34,39 @@
 ### R Interface — ragnar / ellmer Integration
 - [x] `embed_llamar()` — embedding-провайдер для `ragnar_store_create(embed = ...)`
 - [x] `llama_embed_batch()` — батчевый embed списка строк
-- [ ] `chat_llamar()` — ellmer::Chat-совместимый объект для `ragnar_register_tool_retrieve()`
+- [ ] `chat_llamar()` — ellmer::Chat-совместимый объект для `ragnar_register_tool_retrieve()` (см. ниже)
+
+### R Interface — ellmer Integration (S7 Provider)
+
+#### Core Provider
+- [ ] `ProviderLlamaR` — S7 класс, наследует от `ellmer::Provider`
+- [ ] `chat_llamar()` — конструктор, возвращает `ellmer::Chat`
+- [ ] `ellmer::chat_perform()` generic — синхронная генерация
+- [ ] `ellmer::stream_perform()` generic — стриминг (требует streaming generation в llamaR)
+
+#### Turns / Messages
+- [ ] `ellmer::value_turn()` generic — конвертация ответа модели в `Turn`
+- [ ] `ellmer::as_turn()` — конвертация `llama_generate()` output в `ellmer::Turn`
+- [ ] Маппинг `list(role, content)` → `llama_chat_apply_template()` формат
+
+#### Tools
+- [ ] `ellmer::tool_call()` generic — вызов инструментов
+- [ ] `ellmer::as_tool()` generic — регистрация R-функции как tool
+- [ ] GBNF grammar для structured tool calls (через `llama_sampler_init_grammar()`)
+
+#### Structured Output
+- [ ] `ellmer::structured_output()` generic
+- [ ] JSON schema → GBNF конвертер (через `llama_sampler_init_grammar()`)
+
+#### System / Config
+- [ ] `ellmer::system_prompt()` generic — getter/setter
+- [ ] `ellmer::tokens_used()` generic — через `llama_perf()`
+- [ ] `ellmer::model_info()` generic — через `llama_model_info()`
+
+#### Зависимости внутри llamaR (должны быть готовы раньше)
+- [ ] Streaming generation (`llama_generate_stream()`)
+- [x] `llama_sampler_init_grammar()` (уже есть)
+- [x] `llama_perf()` (уже есть)
 
 ### Sampling
 - [x] Temperature, top_k, top_p через параметры `llama_generate()`
@@ -81,8 +113,8 @@
 - [x] `llama_get_logits()` — сырые логиты после decode
 - [ ] `llama_get_logits_ith()` — логиты для i-го токена в батче
 - [ ] `llama_get_embeddings()` — эмбеддинги всех токенов
-- [ ] `llama_get_embeddings_ith()` — эмбеддинги i-го токена
-- [ ] `llama_get_embeddings_seq()` — эмбеддинги pooled по последовательности
+- [x] `llama_get_embeddings_ith()` — эмбеддинги i-го токена
+- [x] `llama_get_embeddings_seq()` — эмбеддинги pooled по последовательности
 
 ### Model Metadata (расширенное)
 - [x] `llama_model_info()` расширен: size, n_params, has_encoder, has_decoder, is_recurrent
@@ -126,12 +158,13 @@
 - [x] CPU inference
 - [x] GPU inference через Vulkan (ggmlR)
 - [x] `n_gpu_layers` параметр для GPU offloading
-- [ ] Явный выбор backend (CPU / Vulkan / auto)
-- [ ] Multi-GPU split через ggmlR scheduler
+- [x] Явный выбор backend (CPU / Vulkan / auto) — через `devices` в `llama_load_model()`
+- [x] Multi-GPU split через `devices` в `llama_load_model()`
 - [x] `llama_encode()` — кодирование для encoder-decoder моделей
 - [x] `llama_batch_init()` / `llama_batch_free()` — низкоуровневое управление батчем
-- [ ] `llama_numa_init()` — инициализация NUMA
-- [ ] `llama_time_us()` — время в микросекундах
+- [x] `llama_numa_init()` — инициализация NUMA
+- [x] `llama_time_us()` — время в микросекундах
+- [x] `llama_backend_devices()` — список доступных устройств
 
 ### Performance & Debug
 - [x] `llama_perf()` — счётчики производительности
@@ -164,7 +197,3 @@
 ### Training / Fine-tuning
 - [ ] `llama_opt_init()` / `llama_opt_epoch()` — fine-tuning
 - [ ] `llama_opt_param_filter_all()` — фильтр параметров для обучения
-
-
-
-

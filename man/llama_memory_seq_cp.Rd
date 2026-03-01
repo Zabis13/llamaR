@@ -24,7 +24,7 @@ No return value, called for side effects.
 Copies cached tokens from one sequence to another in the position range [p0, p1).
 }
 \examples{
-if (FALSE) {
+\dontrun{
 # Copy sequence 0 to sequence 1
 llama_memory_seq_cp(ctx, seq_id_src = 0L, seq_id_dst = 1L,
                     p0 = -1L, p1 = -1L)

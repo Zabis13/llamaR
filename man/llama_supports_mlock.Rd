@@ -13,5 +13,8 @@ A logical scalar: \code{TRUE} if mlock is supported.
 Check whether memory locking is supported
 }
 \examples{
-llama_supports_mlock()
+# Check if memory locking is available (prevents swapping model to disk)
+if (llama_supports_mlock()) {
+  message("mlock available — model weights can be pinned in RAM")
+}
 }

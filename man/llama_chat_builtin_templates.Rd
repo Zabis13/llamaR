@@ -13,5 +13,7 @@ A character vector of built-in template names.
 Returns a character vector of all chat template names supported by llama.cpp.
 }
 \examples{
-llama_chat_builtin_templates()
+# See which chat template formats are supported out of the box
+templates <- llama_chat_builtin_templates()
+head(templates)
 }

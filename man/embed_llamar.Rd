@@ -51,7 +51,7 @@ Computes embeddings using a local GGUF model. When called without \code{x},
 returns a function suitable for passing to \code{ragnar_store_create(embed = ...)}.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 # --- Partial application for ragnar ---
 store <- ragnar_store_create(
   "my_store",

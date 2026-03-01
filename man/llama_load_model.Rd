@@ -4,12 +4,17 @@
 \alias{llama_load_model}
 \title{Load a GGUF model file}
 \usage{
-llama_load_model(path, n_gpu_layers = 0L)
+llama_load_model(path, n_gpu_layers = 0L, devices = NULL)
 }
 \arguments{
 \item{path}{Path to the .gguf model file}
 
 \item{n_gpu_layers}{Number of layers to offload to GPU (0 = CPU only, -1 = all)}
+
+\item{devices}{Character vector of device names or types to use for offloading.
+\code{NULL} (default) uses all available devices. Use \code{"cpu"} for CPU-only,
+\code{"gpu"} for first GPU, or specific device names from
+\code{\link{llama_backend_devices}}. Multiple devices enable multi-GPU split.}
 }
 \value{
 An external pointer (class \code{externalptr}) wrapping the loaded
@@ -22,14 +27,21 @@ An external pointer (class \code{externalptr}) wrapping the loaded
 Load a GGUF model file
 }
 \examples{
-if (FALSE) {
+\dontrun{
 # Load model on CPU only
 model <- llama_load_model("model.gguf")
 
 # Load model with all layers on GPU
 model <- llama_load_model("model.gguf", n_gpu_layers = -1L)
 
-# Load model with first 10 layers on GPU
-model <- llama_load_model("model.gguf", n_gpu_layers = 10L)
+# Explicit CPU-only backend
+model <- llama_load_model("model.gguf", devices = "cpu")
+
+# Specific GPU device (see llama_backend_devices())
+model <- llama_load_model("model.gguf", n_gpu_layers = -1L, devices = "Vulkan0")
+
+# Multi-GPU: use two devices
+model <- llama_load_model("model.gguf", n_gpu_layers = -1L,
+                          devices = c("Vulkan0", "Vulkan1"))
 }
 }

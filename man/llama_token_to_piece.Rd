@@ -23,6 +23,10 @@ Convert a single token ID to its text piece
 \dontrun{
 model <- llama_load_model("model.gguf")
 ctx   <- llama_new_context(model)
-llama_token_to_piece(ctx, 1L)
+
+# Inspect individual tokens from tokenizer output
+tokens <- llama_tokenize(ctx, "Hello world")
+pieces <- vapply(tokens, function(t) llama_token_to_piece(ctx, t), "")
+cat(paste(pieces, collapse = "|"), "\n")
 }
 }

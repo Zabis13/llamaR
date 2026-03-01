@@ -20,7 +20,7 @@ An integer vector of token IDs as used by the model's vocabulary.
 Tokenize text into token IDs
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model)
 

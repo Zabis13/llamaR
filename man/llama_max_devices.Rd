@@ -13,5 +13,7 @@ An integer scalar: the maximum number of compute devices available.
 Get maximum number of devices
 }
 \examples{
-llama_max_devices()
+# Query the maximum number of devices supported by the backend
+n <- llama_max_devices()
+cat("Max devices:", n, "\n")
 }

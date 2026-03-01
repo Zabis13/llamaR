@@ -1,3 +1,48 @@
+# llamaR 0.2.2
+
+## ragnar integration
+
+* `embed_llamar()` — high-level embedding provider compatible with
+  `ragnar_store_create(embed = ...)`. Supports partial application (lazy model
+  loading), direct call returning a matrix, and data.frame input. L2
+  normalization on by default.
+
+## Batch embeddings
+
+* `llama_embed_batch()` — embed multiple texts in one call. Uses true pooled
+  batch decode (`llama_get_embeddings_seq`) for embedding models, with automatic
+  fallback to sequential last-token decode for generative models.
+* `llama_get_embeddings_ith()` — get embedding vector for the i-th token
+  (supports negative indexing).
+* `llama_get_embeddings_seq()` — get pooled embedding for a sequence ID.
+
+## Context embedding mode
+
+* `llama_new_context()` gains `embedding` parameter. When `TRUE`, sets
+  `cparams.embeddings = true` and disables causal attention at creation time.
+  `llama_embed_batch()` uses this flag to choose the optimal code path.
+
+## Backend & device selection
+
+* `llama_load_model()` gains `devices` parameter for explicit backend selection.
+  Accepts device names from `llama_backend_devices()`, type keywords (`"cpu"`,
+  `"gpu"`), or numeric indices. Multiple devices enable multi-GPU split.
+* `llama_backend_devices()` — list all available compute devices (CPU, GPU,
+  iGPU, accelerator) as a data.frame.
+
+## Hardware & system
+
+* `llama_numa_init()` — NUMA optimization with strategies: disabled, distribute,
+  isolate, numactl, mirror.
+* `llama_time_us()` — current time in microseconds.
+
+## Tests
+
+* 40+ new test blocks covering all new functions.
+* Total: 143 passing, 4 expected skips.
+
+---
+
 # llamaR 0.2.1
 
 ## New functions

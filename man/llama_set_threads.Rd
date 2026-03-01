@@ -21,7 +21,7 @@ No return value, called for side effects.
 Set the number of threads for a context
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model)
 llama_set_threads(ctx, n_threads = 8L)

@@ -17,7 +17,7 @@ No return value, called for side effects. Releases the memory
 Free a loaded model
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("model.gguf")
 # ... use model ...
 llama_free_model(model)

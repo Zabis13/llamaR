@@ -79,6 +79,35 @@ test_that("max_devices returns positive integer", {
     expect_true(result >= 1L)
 })
 
+test_that("llama_time_us returns positive numeric", {
+    t <- llama_time_us()
+    expect_true(is.numeric(t))
+    expect_true(t > 0)
+})
+
+test_that("llama_numa_init does not error with disabled", {
+    expect_no_error(llama_numa_init("disabled"))
+})
+
+test_that("llama_numa_init errors on invalid strategy", {
+    expect_error(llama_numa_init("bogus"), "invalid NUMA")
+})
+
+test_that("llama_backend_devices returns data.frame", {
+    df <- llama_backend_devices()
+    expect_true(is.data.frame(df))
+    expect_true(nrow(df) >= 1L)
+    expect_true(all(c("name", "description", "type") %in% names(df)))
+    expect_true(all(df$type %in% c("cpu", "gpu", "igpu", "accel", "unknown")))
+})
+
+test_that("llama_load_model with devices='cpu' works", {
+    skip_if_no_model()
+    model <- llama_load_model(MODEL_PATH, devices = "cpu")
+    expect_false(is.null(model))
+    llama_free_model(model)
+})
+
 test_that("chat_builtin_templates returns character vector", {
     templates <- llama_chat_builtin_templates()
     expect_true(is.character(templates))
@@ -303,6 +332,23 @@ test_that("embeddings have correct dimensionality", {
     expect_true(is.numeric(emb))
     expect_equal(length(emb), shared_info$n_embd)
     expect_true(any(emb != 0))
+})
+
+test_that("llama_get_embeddings_ith returns correct vector", {
+    skip_if_no_model()
+
+    ctx <- llama_new_context(shared_model, n_ctx = 256L, n_threads = 2L)
+    on.exit(llama_free_context(ctx))
+
+    # run embeddings to populate output
+    emb_full <- llama_embeddings(ctx, "Hello")
+
+    # get_embeddings_ith(-1) should return the same as llama_embeddings
+    emb_ith <- llama_get_embeddings_ith(ctx, -1L)
+
+    expect_true(is.numeric(emb_ith))
+    expect_equal(length(emb_ith), shared_info$n_embd)
+    expect_equal(emb_ith, emb_full)
 })
 
 # ============================================================

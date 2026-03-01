@@ -21,7 +21,7 @@ fill-in-middle (FIM) tokens used by the model's vocabulary.
 A value of -1 indicates the token is not defined.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("model.gguf")
 vocab <- llama_vocab_info(model)
 cat("BOS token:", vocab["bos"], "\n")

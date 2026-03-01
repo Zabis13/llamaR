@@ -17,7 +17,7 @@ Returns the raw logit vector (unnormalized log-probabilities) from the
 last token position after a decode operation.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model)
 result <- llama_generate(ctx, "The capital of France is", max_new_tokens = 1L)

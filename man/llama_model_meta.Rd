@@ -17,7 +17,7 @@ A named character vector where names are metadata keys and values
 Returns all key-value metadata pairs stored in the GGUF model file.
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("model.gguf")
 meta <- llama_model_meta(model)
 print(meta)

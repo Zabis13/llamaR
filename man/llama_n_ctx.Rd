@@ -16,7 +16,7 @@ An integer scalar: the context window size (number of tokens).
 Get context window size
 }
 \examples{
-if (FALSE) {
+\dontrun{
 model <- llama_load_model("model.gguf")
 ctx <- llama_new_context(model, n_ctx = 4096L)
 llama_n_ctx(ctx)  # 4096
