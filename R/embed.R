@@ -118,12 +118,7 @@ embed_llamar <- function(x,
 
 # Internal: embed a character vector, return matrix
 .embed_texts <- function(ctx, texts, normalize) {
-    n <- length(texts)
-    vecs <- vector("list", n)
-    for (i in seq_len(n)) {
-        vecs[[i]] <- llama_embeddings(ctx, texts[i])
-    }
-    mat <- do.call(rbind, vecs)
+    mat <- llama_embed_batch(ctx, texts)
     if (normalize) {
         norms <- sqrt(rowSums(mat^2))
         norms[norms == 0] <- 1

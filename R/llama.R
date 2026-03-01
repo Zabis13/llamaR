@@ -315,6 +315,36 @@ llama_embeddings <- function(ctx, text) {
     .Call("r_llama_embeddings", ctx, text)
 }
 
+#' Batch embeddings for multiple texts
+#'
+#' Computes embeddings for a character vector of texts in a single decode pass
+#' using per-sequence pooling. This is more efficient than calling
+#' \code{\link{llama_embeddings}} in a loop when embedding many texts.
+#'
+#' @details Requires a model that supports pooled embeddings (e.g. embedding
+#'   models like nomic-embed, bge, etc.). The context must have enough capacity
+#'   for the total number of tokens across all texts. Causal attention is
+#'   automatically disabled during computation.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param texts Character vector of texts to embed
+#' @return A numeric matrix with \code{nrow = length(texts)} and
+#'   \code{ncol = n_embd}.
+#' @export
+#' @examples
+#' if (FALSE) {
+#' model <- llama_load_model("embedding-model.gguf")
+#' ctx <- llama_new_context(model, n_ctx = 2048L)
+#' llama_set_causal_attn(ctx, FALSE)
+#'
+#' mat <- llama_embed_batch(ctx, c("hello world", "foo bar", "test"))
+#' # mat is a 3 x n_embd matrix
+#' }
+llama_embed_batch <- function(ctx, texts) {
+    stopifnot(is.character(texts))
+    .Call("r_llama_embed_batch", ctx, texts)
+}
+
 # ============================================================
 # Chat templates
 # ============================================================
