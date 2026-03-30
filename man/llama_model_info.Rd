@@ -16,6 +16,7 @@ A named list with fields:
   - `n_vocab`: vocabulary size
   - `n_layer`: number of layers
   - `n_head`: number of attention heads
+  - `n_head_kv`: number of key-value attention heads (GQA)
   - `desc`: human-readable model description string
   - `size`: model size in bytes
   - `n_params`: number of parameters

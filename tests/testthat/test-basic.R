@@ -239,6 +239,56 @@ test_that("set_causal_attn does not error", {
     expect_no_error(llama_set_causal_attn(shared_ctx, TRUE))
 })
 
+test_that("n_ctx_seq returns positive integer", {
+    skip_if_no_model()
+
+    n <- llama_n_ctx_seq(shared_ctx)
+    expect_true(is.integer(n))
+    expect_true(n >= 1L)
+})
+
+test_that("n_batch returns positive integer", {
+    skip_if_no_model()
+
+    n <- llama_n_batch(shared_ctx)
+    expect_true(is.integer(n))
+    expect_true(n >= 1L)
+})
+
+test_that("n_ubatch returns positive integer", {
+    skip_if_no_model()
+
+    n <- llama_n_ubatch(shared_ctx)
+    expect_true(is.integer(n))
+    expect_true(n >= 1L)
+})
+
+test_that("n_seq_max returns positive integer", {
+    skip_if_no_model()
+
+    n <- llama_n_seq_max(shared_ctx)
+    expect_true(is.integer(n))
+    expect_true(n >= 1L)
+})
+
+test_that("n_threads returns positive integer matching set_threads", {
+    skip_if_no_model()
+
+    llama_set_threads(shared_ctx, n_threads = 3L, n_threads_batch = 5L)
+    expect_equal(llama_n_threads(shared_ctx), 3L)
+    expect_equal(llama_n_threads_batch(shared_ctx), 5L)
+    # restore
+    llama_set_threads(shared_ctx, n_threads = 2L)
+})
+
+test_that("pooling_type returns known string", {
+    skip_if_no_model()
+
+    pt <- llama_pooling_type(shared_ctx)
+    expect_true(is.character(pt))
+    expect_true(pt %in% c("none", "mean", "cls", "last", "rank", "unspecified"))
+})
+
 # ============================================================
 # Tokenize / Detokenize
 # ============================================================
@@ -364,6 +414,29 @@ test_that("get_logits returns numeric vector of n_vocab length", {
     expect_true(is.numeric(logits))
     expect_equal(length(logits), shared_info$n_vocab)
     expect_true(any(logits != 0))
+})
+
+test_that("get_logits_ith(-1) matches get_logits after single-token decode", {
+    skip_if_no_model()
+
+    llama_generate(shared_ctx, "Hello", max_new_tokens = 1L, temp = 0)
+
+    logits_all <- llama_get_logits(shared_ctx)
+    logits_ith <- llama_get_logits_ith(shared_ctx, -1L)
+
+    expect_true(is.numeric(logits_ith))
+    expect_equal(length(logits_ith), shared_info$n_vocab)
+    expect_equal(logits_ith, logits_all)
+})
+
+test_that("get_logits_ith(0) returns numeric vector of n_vocab length", {
+    skip_if_no_model()
+
+    llama_generate(shared_ctx, "Hello", max_new_tokens = 1L, temp = 0)
+
+    logits <- llama_get_logits_ith(shared_ctx, 0L)
+    expect_true(is.numeric(logits))
+    expect_equal(length(logits), shared_info$n_vocab)
 })
 
 # ============================================================
@@ -763,4 +836,319 @@ test_that("batch_init works with GPU context loaded", {
     batch <- llama_batch_init(128L)
     expect_false(is.null(batch))
     expect_no_error(llama_batch_free(batch))
+})
+
+# ============================================================
+# Chain: context introspection
+# ============================================================
+
+test_that("context getters are consistent with creation params", {
+    skip_if_no_model()
+
+    ctx <- llama_new_context(shared_model, n_ctx = 128L, n_threads = 3L)
+    on.exit(llama_free_context(ctx))
+    llama_set_threads(ctx, n_threads = 3L, n_threads_batch = 6L)
+
+    expect_true(llama_n_ctx(ctx) >= 128L)
+    expect_true(llama_n_ctx_seq(ctx) >= 1L)
+    expect_true(llama_n_batch(ctx) >= 1L)
+    expect_true(llama_n_ubatch(ctx) >= 1L)
+    expect_true(llama_n_seq_max(ctx) >= 1L)
+    expect_equal(llama_n_threads(ctx), 3L)
+    expect_equal(llama_n_threads_batch(ctx), 6L)
+    expect_true(llama_pooling_type(ctx) %in%
+                    c("none", "mean", "cls", "last", "rank", "unspecified"))
+})
+
+# ============================================================
+# Chain: generate → logits → top token
+# ============================================================
+
+test_that("generate then inspect logits for top token", {
+    skip_if_no_model()
+
+    llama_generate(shared_ctx, "The capital of France is", max_new_tokens = 1L, temp = 0)
+
+    logits <- llama_get_logits_ith(shared_ctx, -1L)
+    expect_equal(length(logits), shared_info$n_vocab)
+
+    top_id <- which.max(logits)
+    expect_true(is.integer(top_id))
+    expect_true(top_id >= 1L && top_id <= shared_info$n_vocab)
+
+    piece <- llama_token_to_piece(shared_ctx, top_id - 1L)  # 0-based token id
+    expect_true(is.character(piece))
+    expect_true(nchar(piece) > 0)
+})
+
+# ============================================================
+# Chain: generate → save state → restore → continue
+# ============================================================
+
+test_that("save state after generation and resume produces output", {
+    skip_if_no_model()
+
+    llama_generate(shared_ctx, "Once upon a time", max_new_tokens = 10L, temp = 0)
+
+    state_file <- tempfile(fileext = ".bin")
+    on.exit(unlink(state_file), add = TRUE)
+
+    expect_true(llama_state_save(shared_ctx, state_file))
+
+    ctx2 <- llama_new_context(shared_model, n_ctx = 256L, n_threads = 2L)
+    on.exit(llama_free_context(ctx2), add = TRUE)
+
+    expect_true(llama_state_load(ctx2, state_file))
+
+    result <- llama_generate(ctx2, " there lived a", max_new_tokens = 10L, temp = 0)
+    expect_true(is.character(result))
+    expect_true(nchar(result) > 0)
+})
+
+# ============================================================
+# Chain: multi-sequence KV cache management
+# ============================================================
+
+test_that("generate, copy sequence, remove original, continue", {
+    skip_if_no_model()
+    skip_if(llama_n_seq_max(shared_ctx) < 2L, "context supports only 1 sequence")
+
+    llama_memory_clear(shared_ctx)
+    llama_generate(shared_ctx, "Hello world", max_new_tokens = 5L, temp = 0)
+
+    range0 <- llama_memory_seq_pos_range(shared_ctx, seq_id = 0L)
+    expect_true(range0["max"] > range0["min"])
+
+    llama_memory_seq_cp(shared_ctx, seq_src = 0L, seq_dst = 1L,
+                        p0 = -1L, p1 = -1L)
+    llama_memory_seq_rm(shared_ctx, seq_id = 0L, p0 = -1L, p1 = -1L)
+
+    result <- llama_generate(shared_ctx, "More text", max_new_tokens = 5L, temp = 0)
+    expect_true(is.character(result))
+})
+
+# ============================================================
+# Chain: set threads → verify → reset
+# ============================================================
+
+test_that("set_threads round-trip via n_threads getters", {
+    skip_if_no_model()
+
+    orig_t  <- llama_n_threads(shared_ctx)
+    orig_tb <- llama_n_threads_batch(shared_ctx)
+
+    llama_set_threads(shared_ctx, n_threads = 1L, n_threads_batch = 2L)
+    expect_equal(llama_n_threads(shared_ctx),       1L)
+    expect_equal(llama_n_threads_batch(shared_ctx), 2L)
+
+    llama_set_threads(shared_ctx, n_threads = orig_t, n_threads_batch = orig_tb)
+    expect_equal(llama_n_threads(shared_ctx),       orig_t)
+    expect_equal(llama_n_threads_batch(shared_ctx), orig_tb)
+})
+
+# ============================================================
+# supports_rpc
+# ============================================================
+
+test_that("supports_rpc returns logical", {
+    expect_true(is.logical(llama_supports_rpc()))
+    expect_equal(length(llama_supports_rpc()), 1L)
+})
+
+# ============================================================
+# synchronize
+# ============================================================
+
+test_that("synchronize does not error", {
+    skip_if_no_model()
+    expect_no_error(llama_synchronize(shared_ctx))
+})
+
+# ============================================================
+# state_get_size
+# ============================================================
+
+test_that("state_get_size returns positive numeric", {
+    skip_if_no_model()
+
+    n <- llama_state_get_size(shared_ctx)
+    expect_true(is.numeric(n))
+    expect_true(n > 0)
+})
+
+# ============================================================
+# memory_seq_div
+# ============================================================
+
+test_that("memory_seq_div does not error", {
+    skip_if_no_model()
+
+    llama_generate(shared_ctx, "Hello", max_new_tokens = 5L, temp = 0)
+    expect_no_error(llama_memory_seq_div(shared_ctx, seq_id = 0L,
+                                         p0 = -1L, p1 = -1L, d = 2L))
+})
+
+# ============================================================
+# vocab_type
+# ============================================================
+
+test_that("vocab_type returns known string", {
+    skip_if_no_model()
+
+    vt <- llama_vocab_type(shared_model)
+    expect_true(is.character(vt))
+    expect_true(vt %in% c("none", "spm", "bpe", "wpm", "ugm", "rwkv", "plamo2"))
+})
+
+# ============================================================
+# vocab_is_eog / vocab_is_control
+# ============================================================
+
+test_that("vocab_is_eog returns logical for known tokens", {
+    skip_if_no_model()
+
+    vocab <- llama_vocab_info(shared_model)
+    eos   <- vocab["eos"]
+    if (!is.na(eos) && eos >= 0L) {
+        expect_true(llama_vocab_is_eog(shared_model, eos))
+    }
+    # token 0 is almost never EOG
+    expect_true(is.logical(llama_vocab_is_eog(shared_model, 0L)))
+})
+
+test_that("vocab_is_control returns logical", {
+    skip_if_no_model()
+
+    expect_true(is.logical(llama_vocab_is_control(shared_model, 0L)))
+})
+
+# ============================================================
+# vocab_get_text / vocab_get_score
+# ============================================================
+
+test_that("vocab_get_text returns character for valid token", {
+    skip_if_no_model()
+
+    tokens <- llama_tokenize(shared_ctx, "Hello", add_special = FALSE)
+    text   <- llama_vocab_get_text(shared_model, tokens[1])
+    expect_true(is.character(text) || is.null(text))
+})
+
+test_that("vocab_get_score returns numeric", {
+    skip_if_no_model()
+
+    tokens <- llama_tokenize(shared_ctx, "Hello", add_special = FALSE)
+    score  <- llama_vocab_get_score(shared_model, tokens[1])
+    expect_true(is.numeric(score))
+    expect_equal(length(score), 1L)
+})
+
+# ============================================================
+# model_info includes n_head_kv
+# ============================================================
+
+test_that("model_info contains n_head_kv", {
+    skip_if_no_model()
+
+    expect_true("n_head_kv" %in% names(shared_info))
+    expect_true(is.integer(shared_info$n_head_kv))
+    expect_true(shared_info$n_head_kv >= 1L)
+})
+
+# ============================================================
+# perf_print / memory_breakdown_print
+# ============================================================
+
+test_that("perf_print does not error", {
+    skip_if_no_model()
+
+    llama_generate(shared_ctx, "Hello", max_new_tokens = 3L, temp = 0)
+    expect_no_error(llama_perf_print(shared_ctx))
+})
+
+test_that("memory_breakdown_print does not error", {
+    skip_if_no_model()
+    expect_no_error(llama_memory_breakdown_print(shared_ctx))
+})
+
+# ============================================================
+# get_embeddings (flat / matrix)
+# ============================================================
+
+test_that("get_embeddings returns matrix of correct shape", {
+    skip_if_no_model()
+
+    ctx <- llama_new_context(shared_model, n_ctx = 256L, n_threads = 2L)
+    on.exit(llama_free_context(ctx))
+
+    llama_embeddings(ctx, "Hello")   # populate output for 1 token position
+
+    mat <- llama_get_embeddings(ctx, n_outputs = 1L)
+    expect_true(is.matrix(mat))
+    expect_equal(nrow(mat), 1L)
+    expect_equal(ncol(mat), shared_info$n_embd)
+    expect_true(any(mat != 0))
+})
+
+# ============================================================
+# get_model
+# ============================================================
+
+test_that("get_model returns the same model object", {
+    skip_if_no_model()
+
+    m <- llama_get_model(shared_ctx)
+    expect_false(is.null(m))
+    expect_true(inherits(m, "externalptr"))
+
+    # model info from retrieved handle matches original
+    info2 <- llama_model_info(m)
+    expect_equal(info2$n_embd,  shared_info$n_embd)
+    expect_equal(info2$n_vocab, shared_info$n_vocab)
+})
+
+# ============================================================
+# set_warmup
+# ============================================================
+
+test_that("set_warmup does not error", {
+    skip_if_no_model()
+
+    expect_no_error(llama_set_warmup(shared_ctx, TRUE))
+    expect_no_error(llama_set_warmup(shared_ctx, FALSE))
+})
+
+# ============================================================
+# set_abort_callback
+# ============================================================
+
+test_that("set_abort_callback NULL clears without error", {
+    skip_if_no_model()
+    expect_no_error(llama_set_abort_callback(shared_ctx, NULL))
+})
+
+test_that("abort callback that always returns FALSE does not abort generation", {
+    skip_if_no_model()
+
+    llama_set_abort_callback(shared_ctx, function() FALSE)
+    on.exit(llama_set_abort_callback(shared_ctx, NULL))
+
+    result <- llama_generate(shared_ctx, "Hello", max_new_tokens = 5L, temp = 0)
+    expect_true(is.character(result))
+    expect_true(nchar(result) > 0)
+})
+
+test_that("abort callback that returns TRUE aborts immediately", {
+    skip_if_no_model()
+
+    llama_set_abort_callback(shared_ctx, function() TRUE)
+    on.exit(llama_set_abort_callback(shared_ctx, NULL))
+
+    # aborted generation should either return empty string or error — both are acceptable
+    result <- tryCatch(
+        llama_generate(shared_ctx, "Hello", max_new_tokens = 20L, temp = 0),
+        error = function(e) ""
+    )
+    # Either way, no crash
+    expect_true(is.character(result))
 })

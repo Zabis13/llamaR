@@ -1,3 +1,20 @@
+# llamaR 0.2.3
+
+## Context getters
+
+* `llama_n_ctx_seq()` — per-sequence context window size.
+* `llama_n_batch()` — logical batch size (max tokens per `llama_decode` call).
+* `llama_n_ubatch()` — physical micro-batch size.
+* `llama_n_seq_max()` — maximum number of concurrent sequences.
+* `llama_n_threads()` / `llama_n_threads_batch()` — read back thread counts set via `llama_set_threads()`.
+* `llama_pooling_type()` — pooling type of the context as a string (`"none"`, `"mean"`, `"cls"`, `"last"`, `"rank"`).
+
+## Logits
+
+* `llama_get_logits_ith()` — logit vector for a specific token position in the last decoded batch. Supports negative indexing (`-1` = last token).
+
+---
+
 # llamaR 0.2.2
 
 ## ragnar integration

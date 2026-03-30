@@ -183,6 +183,7 @@ llama_free_model <- function(model) {
 #'   - `n_vocab`: vocabulary size
 #'   - `n_layer`: number of layers
 #'   - `n_head`: number of attention heads
+#'   - `n_head_kv`: number of key-value attention heads (GQA)
 #'   - `desc`: human-readable model description string
 #'   - `size`: model size in bytes
 #'   - `n_params`: number of parameters
@@ -476,6 +477,22 @@ llama_get_embeddings_seq <- function(ctx, seq_id) {
     .Call("r_llama_get_embeddings_seq", ctx, as.integer(seq_id))
 }
 
+#' Get all output token embeddings as a matrix
+#'
+#' Returns a matrix of shape \code{n_outputs × n_embd} containing the raw
+#' embedding vectors for all tokens whose \code{logits} flag was set in the batch.
+#' Only works when \code{pooling_type == "none"} (generative models or embedding
+#' contexts without pooling). For pooled embeddings use [llama_get_embeddings_seq].
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param n_outputs Number of outputs requested in the last decode call
+#'   (i.e. how many tokens had \code{logits = TRUE} in the batch).
+#' @return A numeric matrix with \code{n_outputs} rows and \code{n_embd} columns.
+#' @export
+llama_get_embeddings <- function(ctx, n_outputs) {
+    .Call("r_llama_get_embeddings", ctx, as.integer(n_outputs))
+}
+
 # ============================================================
 # Chat templates
 # ============================================================
@@ -701,6 +718,66 @@ llama_vocab_info <- function(model) {
     .Call("r_llama_vocab_info", model)
 }
 
+#' Get vocabulary type
+#'
+#' @param model Model handle returned by [llama_load_model]
+#' @return A character string: one of `"spm"` (LLaMA/SentencePiece BPE),
+#'   `"bpe"` (GPT-2 BPE), `"wpm"` (BERT WordPiece), `"ugm"` (T5 Unigram),
+#'   `"rwkv"`, `"plamo2"`, or `"none"`.
+#' @export
+llama_vocab_type <- function(model) {
+    .Call("r_llama_vocab_type", model)
+}
+
+#' Check if a token is an end-of-generation token
+#'
+#' Returns `TRUE` for EOS, EOT, and other tokens that signal end of output.
+#' Useful for implementing custom generation loops.
+#'
+#' @param model Model handle returned by [llama_load_model]
+#' @param token Integer token ID (0-based)
+#' @return A logical scalar.
+#' @export
+llama_vocab_is_eog <- function(model, token) {
+    .Call("r_llama_vocab_is_eog", model, as.integer(token))
+}
+
+#' Check if a token is a control token
+#'
+#' @param model Model handle returned by [llama_load_model]
+#' @param token Integer token ID (0-based)
+#' @return A logical scalar.
+#' @export
+llama_vocab_is_control <- function(model, token) {
+    .Call("r_llama_vocab_is_control", model, as.integer(token))
+}
+
+#' Get the text representation of a token
+#'
+#' Returns the raw text string stored in the vocabulary for a given token ID.
+#' Unlike [llama_token_to_piece], this does not apply any special rendering —
+#' it returns exactly what is stored in the GGUF vocabulary table.
+#'
+#' @param model Model handle returned by [llama_load_model]
+#' @param token Integer token ID (0-based)
+#' @return A character string, or `NULL` if the token has no text entry.
+#' @export
+llama_vocab_get_text <- function(model, token) {
+    .Call("r_llama_vocab_get_text", model, as.integer(token))
+}
+
+#' Get the score of a token
+#'
+#' Returns the log-probability score stored in the vocabulary (used by SPM/UGM tokenizers).
+#'
+#' @param model Model handle returned by [llama_load_model]
+#' @param token Integer token ID (0-based)
+#' @return A numeric scalar.
+#' @export
+llama_vocab_get_score <- function(model, token) {
+    .Call("r_llama_vocab_get_score", model, as.integer(token))
+}
+
 # ============================================================
 # Context configuration
 # ============================================================
@@ -758,6 +835,126 @@ llama_set_causal_attn <- function(ctx, causal) {
 #' }
 llama_n_ctx <- function(ctx) {
     .Call("r_llama_n_ctx", ctx)
+}
+
+#' Get the model associated with a context
+#'
+#' Returns the model handle that was used to create this context.
+#' The returned object is the same R external pointer that was passed to
+#' [llama_new_context] — no new allocation occurs.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return A model handle (external pointer), equivalent to the original
+#'   handle returned by [llama_load_model].
+#' @export
+llama_get_model <- function(ctx) {
+    .Call("r_llama_get_model", ctx)
+}
+
+#' Set warmup mode
+#'
+#' When `warmup = TRUE`, the context runs in warmup mode which pre-caches
+#' model weights in GPU memory without producing meaningful outputs.
+#' Call with `warmup = FALSE` to return to normal inference mode.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param warmup Logical; `TRUE` to enable warmup mode, `FALSE` to disable.
+#' @return No return value, called for side effects.
+#' @export
+llama_set_warmup <- function(ctx, warmup) {
+    .Call("r_llama_set_warmup", ctx, as.logical(warmup))
+    invisible(NULL)
+}
+
+#' Set or clear the abort callback
+#'
+#' Registers an R function that is called periodically during generation.
+#' If the function returns `TRUE`, the current decode operation is aborted.
+#' Pass `NULL` to remove the callback.
+#'
+#' Note: only one callback is active globally — setting a new one replaces
+#' the previous one across all contexts.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param fn A zero-argument R function returning a logical scalar,
+#'   or `NULL` to clear.
+#' @return No return value, called for side effects.
+#' @export
+#' @examples
+#' \dontrun{
+#' # Abort after 2 seconds
+#' deadline <- Sys.time() + 2
+#' llama_set_abort_callback(ctx, function() Sys.time() > deadline)
+#' result <- llama_generate(ctx, "Tell me a long story", max_new_tokens = 500L)
+#' llama_set_abort_callback(ctx, NULL)
+#' }
+llama_set_abort_callback <- function(ctx, fn) {
+    .Call("r_llama_set_abort_callback", ctx, fn)
+    invisible(NULL)
+}
+
+#' Get per-sequence context window size
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return An integer scalar: maximum context size per sequence.
+#' @export
+llama_n_ctx_seq <- function(ctx) {
+    .Call("r_llama_n_ctx_seq", ctx)
+}
+
+#' Get logical batch size
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return An integer scalar: the logical batch size (max tokens per `llama_decode` call).
+#' @export
+llama_n_batch <- function(ctx) {
+    .Call("r_llama_n_batch", ctx)
+}
+
+#' Get physical micro-batch size
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return An integer scalar: the physical micro-batch size.
+#' @export
+llama_n_ubatch <- function(ctx) {
+    .Call("r_llama_n_ubatch", ctx)
+}
+
+#' Get maximum number of sequences
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return An integer scalar: maximum number of concurrent sequences.
+#' @export
+llama_n_seq_max <- function(ctx) {
+    .Call("r_llama_n_seq_max", ctx)
+}
+
+#' Get number of threads for single-token generation
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return An integer scalar: current thread count for generation.
+#' @export
+llama_n_threads <- function(ctx) {
+    .Call("r_llama_n_threads", ctx)
+}
+
+#' Get number of threads for batch processing
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return An integer scalar: current thread count for prompt encoding.
+#' @export
+llama_n_threads_batch <- function(ctx) {
+    .Call("r_llama_n_threads_batch", ctx)
+}
+
+#' Get pooling type
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return A character string: one of `"none"`, `"mean"`, `"cls"`, `"last"`,
+#'   `"rank"`, `"unspecified"`.
+#' @export
+llama_pooling_type <- function(ctx) {
+    .Call("r_llama_pooling_type", ctx)
 }
 
 # ============================================================
@@ -867,6 +1064,25 @@ llama_memory_seq_add <- function(ctx, seq_id, p0, p1, delta) {
     invisible(NULL)
 }
 
+#' Integer-divide token positions in a sequence
+#'
+#' Divides all token positions in the range \code{[p0, p1)} for the given
+#' sequence by \code{d}. Use \code{p0 = -1} and \code{p1 = -1} for the full range.
+#' Useful for implementing sliding-window context compression.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param seq_id Sequence ID
+#' @param p0 Start position (inclusive). Use -1 for beginning.
+#' @param p1 End position (exclusive). Use -1 for end.
+#' @param d Divisor (positive integer)
+#' @return No return value, called for side effects.
+#' @export
+llama_memory_seq_div <- function(ctx, seq_id, p0, p1, d) {
+    .Call("r_llama_memory_seq_div", ctx, as.integer(seq_id),
+          as.integer(p0), as.integer(p1), as.integer(d))
+    invisible(NULL)
+}
+
 #' Get position range for a sequence
 #'
 #' Returns the minimum and maximum token positions for a given sequence
@@ -942,6 +1158,32 @@ llama_state_load <- function(ctx, path) {
     .Call("r_llama_state_load", ctx, path)
 }
 
+#' Get the size of the serialized context state in bytes
+#'
+#' Returns the number of bytes required to serialize the current context state
+#' (KV cache + sampling state). Use before allocating a buffer for raw state I/O.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return A numeric scalar (size in bytes).
+#' @export
+llama_state_get_size <- function(ctx) {
+    .Call("r_llama_state_get_size", ctx)
+}
+
+#' Synchronize asynchronous computation
+#'
+#' Blocks until all pending GPU/async operations for this context are complete.
+#' Normally not needed — `llama_decode` and `llama_generate` are synchronous —
+#' but useful when using low-level batch APIs in async mode.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return No return value, called for side effects.
+#' @export
+llama_synchronize <- function(ctx) {
+    .Call("r_llama_synchronize", ctx)
+    invisible(NULL)
+}
+
 # ============================================================
 # Logits
 # ============================================================
@@ -965,6 +1207,19 @@ llama_state_load <- function(ctx, path) {
 #' }
 llama_get_logits <- function(ctx) {
     .Call("r_llama_get_logits", ctx)
+}
+
+#' Get logits for a specific token position
+#'
+#' Returns the logit vector for token at index \code{i} in the last decoded batch.
+#' Use \code{i = -1} to get the logits for the last token.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @param i Integer index into the last batch (0-based). Use \code{-1} for the last token.
+#' @return A numeric vector of length \code{n_vocab}.
+#' @export
+llama_get_logits_ith <- function(ctx, i) {
+    .Call("r_llama_get_logits_ith", ctx, as.integer(i))
 }
 
 # ============================================================
@@ -1016,6 +1271,34 @@ llama_perf_reset <- function(ctx) {
     invisible(NULL)
 }
 
+#' Print performance statistics to the console
+#'
+#' Prints a formatted summary of timing and throughput statistics for the context
+#' (load time, prompt processing speed, generation speed). Output goes to the
+#' R console via the llama.cpp logging callback.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return No return value, called for side effects.
+#' @export
+llama_perf_print <- function(ctx) {
+    .Call("r_llama_perf_context_print", ctx)
+    invisible(NULL)
+}
+
+#' Print memory breakdown by device
+#'
+#' Prints a debug summary of how model weights are distributed across compute
+#' devices (CPU, GPU layers). Useful for diagnosing memory allocation with
+#' partial GPU offload.
+#'
+#' @param ctx Context handle returned by [llama_new_context]
+#' @return No return value, called for side effects.
+#' @export
+llama_memory_breakdown_print <- function(ctx) {
+    .Call("r_llama_memory_breakdown_print", ctx)
+    invisible(NULL)
+}
+
 # ============================================================
 # System & Hardware info
 # ============================================================
@@ -1057,6 +1340,14 @@ llama_supports_mmap <- function() {
 #' }
 llama_supports_mlock <- function() {
     .Call("r_llama_supports_mlock")
+}
+
+#' Check whether RPC backend is available
+#'
+#' @return A logical scalar: `TRUE` if the RPC backend is compiled in.
+#' @export
+llama_supports_rpc <- function() {
+    .Call("r_llama_supports_rpc")
 }
 
 #' Get maximum number of devices
