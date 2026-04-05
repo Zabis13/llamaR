@@ -33,10 +33,6 @@ static FILE *const r_llama_dummy_stream_ = (FILE*)(void*)(intptr_t)1;
 #define fputs(str, stream) \
     ((stream == r_llama_dummy_stream_) ? (REprintf("%s", str), 0) : fputs(str, stream))
 
-// fflush is a no-op for our dummy streams
-#define fflush(stream) \
-    ((stream == r_llama_dummy_stream_) ? 0 : fflush(stream))
-
 // Override exit/_Exit to prevent process termination (CRAN requirement)
 static inline void r_llama_exit(int status) {
     Rf_error("llama: exit called with status %d", status);
