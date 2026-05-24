@@ -4,14 +4,43 @@
 \alias{llama_new_context}
 \title{Create an inference context}
 \usage{
-llama_new_context(model, n_ctx = 2048L, n_threads = 4L, embedding = FALSE)
+llama_new_context(
+  model,
+  n_ctx = 2048L,
+  n_threads = NULL,
+  n_threads_batch = NULL,
+  n_batch = 2048L,
+  n_ubatch = 512L,
+  n_seq_max = 1L,
+  flash_attn = "auto",
+  embedding = FALSE
+)
 }
 \arguments{
 \item{model}{Model handle returned by [llama_load_model]}
 
 \item{n_ctx}{Context window size (number of tokens). 0 means use the model's trained value.}
 
-\item{n_threads}{Number of CPU threads to use}
+\item{n_threads}{Number of CPU threads for single-token decode. \code{NULL}
+(default) picks \code{2L} when a GPU backend is available, otherwise \code{4L}.}
+
+\item{n_threads_batch}{Number of CPU threads for batch (prompt) processing.
+\code{NULL} (default) inherits from \code{n_threads}.}
+
+\item{n_batch}{Logical maximum batch size submitted to a single decode call
+(tokens). Default \code{2048L} matches llama.cpp.}
+
+\item{n_ubatch}{Physical micro-batch size used inside decode. Larger values
+improve prefill throughput on GPU at the cost of memory. Default \code{512L}.}
+
+\item{n_seq_max}{Maximum number of parallel sequences the context can hold
+simultaneously (KV cache is partitioned across them). Default \code{1L}
+for single-prompt use; raise to \code{N} when using
+\code{\link{llama_generate_batch}} with \code{N} prompts. Increasing this
+does not by itself enlarge the context — also size \code{n_ctx} accordingly.}
+
+\item{flash_attn}{One of \code{"auto"} (let llama.cpp decide, default),
+\code{"on"} (force enable Flash Attention), or \code{"off"} (disable).}
 
 \item{embedding}{Logical; if \code{TRUE}, create context in embedding mode.
 This enables embedding output and disables causal attention, suitable for
@@ -34,6 +63,10 @@ ctx <- llama_new_context(model, n_ctx = 4096L, n_threads = 8L)
 # ... use context for generation ...
 llama_free_context(ctx)
 llama_free_model(model)
+
+# Tune for GPU prefill throughput
+ctx <- llama_new_context(model, n_ctx = 4096L,
+                         n_ubatch = 2048L, flash_attn = "on")
 
 # Embedding mode
 emb_ctx <- llama_new_context(model, n_ctx = 512L, embedding = TRUE)

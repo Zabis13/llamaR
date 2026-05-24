@@ -50,6 +50,8 @@ struct llama_context {
 
     void synchronize();
 
+    int  n_splits() const;
+
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;
 

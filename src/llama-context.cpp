@@ -10,6 +10,8 @@
 
 #include <cinttypes>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -535,6 +537,13 @@ void llama_context::sched_reserve() {
 
     LLAMA_LOG_INFO("%s: reserve took %.2f ms, sched copies = %d\n",
             __func__, (t_end_us - t_start_us)/1000.0, ggml_backend_sched_get_n_copies(sched.get()));
+}
+
+int llama_context::n_splits() const {
+    if (!sched) {
+        return 0;
+    }
+    return ggml_backend_sched_get_n_splits(sched.get());
 }
 
 void llama_context::synchronize() {
@@ -1118,24 +1127,38 @@ bool llama_context::apply_adapter_cvec(
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+    // === temp profiling (LLAMA_DECODE_PROF=1, output to /tmp/llama_decode_prof.log) ===
+    static const bool pu_prof = (getenv("LLAMA_DECODE_PROF") != nullptr);
+    static int64_t pu_t_apply = 0, pu_t_gparams = 0, pu_t_build = 0, pu_t_set_inputs = 0, pu_t_compute = 0;
+    static int pu_calls = 0, pu_reused = 0, pu_built = 0;
+    int64_t pu_t0;
+    // ======================
+
+    pu_t0 = pu_prof ? ggml_time_us() : 0;
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
         return nullptr;
     }
+    if (pu_prof) pu_t_apply += ggml_time_us() - pu_t0;
 
     auto * res = gf_res_prev.get();
     auto * gf  = res->get_gf();
 
     // the new graph parameters
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
+    pu_t0 = pu_prof ? ggml_time_us() : 0;
     const auto gparams = graph_params(res, ubatch, mctx, gtype);
+    if (pu_prof) pu_t_gparams += ggml_time_us() - pu_t0;
 
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
 
         n_reused++;
+        if (pu_prof) pu_reused++;
     } else {
+        if (pu_prof) pu_built++;
+        pu_t0 = pu_prof ? ggml_time_us() : 0;
         res->reset();
 
         ggml_backend_sched_reset(sched.get());
@@ -1158,18 +1181,23 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             ret = GGML_STATUS_ALLOC_FAILED;
             return nullptr;
         }
+        if (pu_prof) pu_t_build += ggml_time_us() - pu_t0;
     }
 
     // set the input data for the input tensors
     {
         //const auto t_start_us = ggml_time_us();
 
+        pu_t0 = pu_prof ? ggml_time_us() : 0;
         res->set_inputs(&ubatch);
+        if (pu_prof) pu_t_set_inputs += ggml_time_us() - pu_t0;
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
+    pu_t0 = pu_prof ? ggml_time_us() : 0;
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+    if (pu_prof) pu_t_compute += ggml_time_us() - pu_t0;
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
@@ -1177,6 +1205,22 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     }
 
     ret = GGML_STATUS_SUCCESS;
+
+    if (pu_prof) {
+        pu_calls++;
+        if (pu_calls % 25 == 0) {
+            FILE *fp = fopen("/tmp/llama_decode_prof.log", "a");
+            if (fp) {
+                fprintf(fp,
+                    "[PU_PROF] calls=%d reused=%d built=%d | apply=%.1fms gparams=%.1fms build=%.1fms set_inputs=%.1fms compute=%.1fms (avg/call: apply=%.2f gparams=%.2f build=%.2f set_inputs=%.2f compute=%.2f ms)\n",
+                    pu_calls, pu_reused, pu_built,
+                    pu_t_apply/1000.0, pu_t_gparams/1000.0, pu_t_build/1000.0, pu_t_set_inputs/1000.0, pu_t_compute/1000.0,
+                    (pu_t_apply/1000.0)/pu_calls, (pu_t_gparams/1000.0)/pu_calls, (pu_t_build/1000.0)/pu_calls,
+                    (pu_t_set_inputs/1000.0)/pu_calls, (pu_t_compute/1000.0)/pu_calls);
+                fclose(fp);
+            }
+        }
+    }
 
     return res;
 }
@@ -1472,6 +1516,16 @@ static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_s
 int llama_context::decode(const llama_batch & batch_inp) {
     GGML_ASSERT((!batch_inp.token && batch_inp.embd) || (batch_inp.token && !batch_inp.embd)); // NOLINT
 
+    // === temp profiling (LLAMA_DECODE_PROF=1, output to /tmp/llama_decode_prof.log) ===
+    static const bool dec_prof = (getenv("LLAMA_DECODE_PROF") != nullptr);
+    static int64_t dec_t_balloc = 0, dec_t_sched_reserve = 0, dec_t_memory_update = 0;
+    static int64_t dec_t_init_batch = 0, dec_t_output_reserve = 0, dec_t_process = 0, dec_t_extract = 0;
+    static int64_t dec_t_total = 0;
+    static int dec_calls = 0;
+    int64_t dec_t0_total = dec_prof ? ggml_time_us() : 0;
+    int64_t dec_t0;
+    // ======================
+
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(batch_inp);
@@ -1518,7 +1572,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
     }
 
-    if (!balloc->init(batch_inp, vocab, memory.get(), n_embd, n_seq_max, output_all)) {
+    dec_t0 = dec_prof ? ggml_time_us() : 0;
+    bool balloc_ok = balloc->init(batch_inp, vocab, memory.get(), n_embd, n_seq_max, output_all);
+    if (dec_prof) dec_t_balloc += ggml_time_us() - dec_t0;
+    if (!balloc_ok) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
@@ -1548,18 +1605,24 @@ int llama_context::decode(const llama_batch & batch_inp) {
     embd_seq.clear();
     output_swaps.clear();
 
+    dec_t0 = dec_prof ? ggml_time_us() : 0;
     sched_reserve();
+    if (dec_prof) dec_t_sched_reserve += ggml_time_us() - dec_t0;
 
     bool did_optimize = false;
 
     // handle any pending shifts/copies
+    dec_t0 = dec_prof ? ggml_time_us() : 0;
     memory_update(false);
+    if (dec_prof) dec_t_memory_update += ggml_time_us() - dec_t0;
 
     llama_memory_context_ptr mctx;
 
+    int64_t dec_t0_ib = dec_prof ? ggml_time_us() : 0;
     while (true) {
         mctx = memory->init_batch(*balloc, cparams.n_ubatch, output_all);
         if (!mctx) {
+            if (dec_prof) dec_t_init_batch += ggml_time_us() - dec_t0_ib;
             return -2;
         }
 
@@ -1599,9 +1662,13 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         break;
     }
+    if (dec_prof) dec_t_init_batch += ggml_time_us() - dec_t0_ib;
 
     // reserve output buffer
-    if (output_reserve(n_outputs_all) < n_outputs_all) {
+    dec_t0 = dec_prof ? ggml_time_us() : 0;
+    int32_t n_out_reserved = output_reserve(n_outputs_all);
+    if (dec_prof) dec_t_output_reserve += ggml_time_us() - dec_t0;
+    if (n_out_reserved < n_outputs_all) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %d outputs\n", __func__, n_outputs_all);
         return -2;
     };
@@ -1628,7 +1695,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         ggml_status status;
+        int64_t dec_t0_pu = dec_prof ? ggml_time_us() : 0;
         const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
+        if (dec_prof) dec_t_process += ggml_time_us() - dec_t0_pu;
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -1665,6 +1734,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
         //if (n_past%100 == 0) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
+
+        int64_t dec_t0_ex = dec_prof ? ggml_time_us() : 0;
 
         auto * t_logits = res->get_logits();
         auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;
@@ -1757,6 +1828,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
             copy_tensor_async_candidates(res->t_candidates,     sampling.candidates, stride, sampling.candidates_count, seq_to_output_row, sched.get());
         }
 
+        if (dec_prof) dec_t_extract += ggml_time_us() - dec_t0_ex;
         n_outputs_prev += n_outputs;
     } while (mctx->next());
 
@@ -1812,6 +1884,25 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
+
+    if (dec_prof) {
+        dec_t_total += ggml_time_us() - dec_t0_total;
+        dec_calls++;
+        if (dec_calls % 25 == 0) {
+            FILE *fp = fopen("/tmp/llama_decode_prof.log", "a");
+            if (fp) {
+                fprintf(fp,
+                    "[DEC_PROF] calls=%d | total=%.1fms balloc=%.1fms sched_reserve=%.1fms memory_update=%.1fms init_batch=%.1fms output_reserve=%.1fms process=%.1fms extract=%.1fms (avg/call: total=%.2f balloc=%.2f sched_reserve=%.2f memory_update=%.2f init_batch=%.2f output_reserve=%.2f process=%.2f extract=%.2f ms)\n",
+                    dec_calls,
+                    dec_t_total/1000.0, dec_t_balloc/1000.0, dec_t_sched_reserve/1000.0, dec_t_memory_update/1000.0,
+                    dec_t_init_batch/1000.0, dec_t_output_reserve/1000.0, dec_t_process/1000.0, dec_t_extract/1000.0,
+                    (dec_t_total/1000.0)/dec_calls, (dec_t_balloc/1000.0)/dec_calls, (dec_t_sched_reserve/1000.0)/dec_calls,
+                    (dec_t_memory_update/1000.0)/dec_calls, (dec_t_init_batch/1000.0)/dec_calls,
+                    (dec_t_output_reserve/1000.0)/dec_calls, (dec_t_process/1000.0)/dec_calls, (dec_t_extract/1000.0)/dec_calls);
+                fclose(fp);
+            }
+        }
+    }
 
     return 0;
 }
@@ -3133,6 +3224,10 @@ void llama_set_warmup(llama_context * ctx, bool warmup) {
 
 void llama_synchronize(llama_context * ctx) {
     ctx->synchronize();
+}
+
+int llama_n_splits(llama_context * ctx) {
+    return ctx->n_splits();
 }
 
 float * llama_get_logits(llama_context * ctx) {

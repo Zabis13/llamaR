@@ -21,7 +21,8 @@ llama_generate(
   mirostat = 0L,
   mirostat_tau = 5,
   mirostat_eta = 0.1,
-  grammar = NULL
+  grammar = NULL,
+  with_timings = FALSE
 )
 }
 \arguments{
@@ -58,6 +59,14 @@ llama_generate(
 \item{mirostat_eta}{Mirostat learning rate (eta parameter)}
 
 \item{grammar}{GBNF grammar string for constrained generation (NULL = disabled)}
+
+\item{with_timings}{If TRUE, attach a named numeric vector of per-stage
+timings (in ms) as attribute "timings" of the returned text. Stages:
+tokenize, build_sampler, kv_clear, prefill_dispatch, prefill_sync,
+gpu_sync (cumulative across decode-loop iterations), sample (cumulative),
+decode_dispatch (cumulative), detokenize, plus n_iterations and t_total_ms.
+Adds llama_synchronize calls inside the loop, so it is intended for
+profiling and may slightly slow generation.}
 }
 \value{
 A character scalar containing the generated text (excluding the

@@ -34,6 +34,15 @@ The llamaR `configure` script handles this automatically:
 If Vulkan is not found on the system, the build proceeds without it — the Vulkan backend
 in `libggml.a` will simply remain unused, and inference runs on CPU only.
 
+## Performance
+
+Measured on AMD Ryzen 5 5600 + AMD RX 9070, model Ministral-3-3B-Instruct-2512-Q8_0, 50 tokens, avg of 3 runs:
+
+| Backend | Speed (tokens/sec) | Speedup |
+|---|---:|---:|
+| CPU (8 threads) | 8.5 | 1.0x |
+| GPU (Vulkan) | 108.0 | 12.7x |
+
 ## Installation
 
 ### Dependencies

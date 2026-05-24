@@ -18,3 +18,7 @@ rm -rf llamaR.Rcheck
 
 # Remove build artifacts
 rm -f src/symbols.rds
+
+# Remove installed copy and stale install lock
+rm -rf /home/yuri/R/x86_64-pc-linux-gnu-library/4.3/llamaR
+rm -rf /home/yuri/R/x86_64-pc-linux-gnu-library/4.3/00LOCK-llamaR

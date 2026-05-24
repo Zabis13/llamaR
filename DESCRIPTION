@@ -3,7 +3,8 @@ Type: Package
 Title: Interface for Large Language Models via 'llama.cpp'
 Version: 0.2.3
 Authors@R: c(
-    person("Yuri", "Baramykov", email = "lbsbmsu@mail.ru", role = c("aut", "cre")),
+    person("Yuri", "Baramykov", email = "lbsbmsu@mail.ru", role = c("aut", "cre"),
+           comment = c(ORCID = "0009-0000-7627-4217")),
     person("Georgi", "Gerganov", role = "cph",
            comment = "Author of the 'llama.cpp' library included in src/"))
 Description: Provides 'R' bindings to 'llama.cpp' for running Large Language Models

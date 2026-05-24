@@ -4,17 +4,36 @@
 \alias{llama_load_model}
 \title{Load a GGUF model file}
 \usage{
-llama_load_model(path, n_gpu_layers = 0L, devices = NULL)
+llama_load_model(
+  path,
+  n_gpu_layers = -1L,
+  devices = NULL,
+  split_mode = "layer",
+  use_mmap = TRUE,
+  use_mlock = FALSE
+)
 }
 \arguments{
 \item{path}{Path to the .gguf model file}
 
-\item{n_gpu_layers}{Number of layers to offload to GPU (0 = CPU only, -1 = all)}
+\item{n_gpu_layers}{Number of layers to offload to GPU
+(\code{-1L} = all, \code{0L} = CPU only). Default \code{-1L} offloads
+everything to the GPU when one is detected; if no GPU backend is
+available, falls back to CPU with a warning.}
 
 \item{devices}{Character vector of device names or types to use for offloading.
 \code{NULL} (default) uses all available devices. Use \code{"cpu"} for CPU-only,
 \code{"gpu"} for first GPU, or specific device names from
 \code{\link{llama_backend_devices}}. Multiple devices enable multi-GPU split.}
+
+\item{split_mode}{Multi-GPU split strategy: \code{"none"} (single GPU),
+\code{"layer"} (split layers across GPUs, default), or \code{"row"}
+(tensor-parallel across GPUs).}
+
+\item{use_mmap}{Logical; map model file into memory (default \code{TRUE}).}
+
+\item{use_mlock}{Logical; force the OS to keep model pages resident
+(default \code{FALSE}).}
 }
 \value{
 An external pointer (class \code{externalptr}) wrapping the loaded
@@ -28,11 +47,11 @@ Load a GGUF model file
 }
 \examples{
 \dontrun{
-# Load model on CPU only
+# Default: full GPU offload (falls back to CPU if no GPU)
 model <- llama_load_model("model.gguf")
 
-# Load model with all layers on GPU
-model <- llama_load_model("model.gguf", n_gpu_layers = -1L)
+# Force CPU-only
+model <- llama_load_model("model.gguf", n_gpu_layers = 0L)
 
 # Explicit CPU-only backend
 model <- llama_load_model("model.gguf", devices = "cpu")
