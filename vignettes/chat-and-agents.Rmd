@@ -1,0 +1,196 @@
+---
+title: "Chat and Agents"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Chat and Agents}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE, purl=FALSE}
+# Every chunk needs a GGUF model (and usually a GPU), so this vignette is
+# static: the code is shown but not run at build time.
+knitr::opts_chunk$set(eval = FALSE, purl = FALSE)
+```
+
+llamaR turns a local GGUF model into a chat backend for the R ecosystem. You
+can talk to it three ways, from lowest to highest level:
+
+* **HTTP server** — `llama_serve_openai()` exposes an OpenAI-compatible API any
+  client can hit (OpenCode, the `openai` SDK, `curl`).
+* **ellmer `Chat`** — `chat_llamar()` returns an `ellmer::Chat`, so the whole
+  ellmer / ragnar toolchain works against local inference.
+* **Command-line example** — `inst/examples/chat.R` wraps both for quick use.
+
+```{r, eval=FALSE, purl=FALSE}
+library(llamaR)
+```
+
+---
+
+## 1. The chat object: `chat_llamar()`
+
+`chat_llamar()` returns an [ellmer](https://ellmer.tidyverse.org/) `Chat`. It
+has two modes, picked by which argument you pass — the same DBI-style choice as
+`DBI::dbConnect()` (connection parameters *or* a ready connection).
+
+### Mode A — spawn a server for a model
+
+Give it a model file and it starts `llama_serve_openai()` in a background
+process (via the **callr** package), waits for it to come up, and points a
+`Chat` at it. The server's lifetime is tied to the returned object: when it is
+garbage-collected (or R exits) the process is killed.
+
+```{r, eval=FALSE, purl=FALSE}
+chat <- chat_llamar(model_path = "Ministral-3B-Instruct.gguf")
+
+chat$chat("Why is the sky blue?")
+
+chat_llamar_stop(chat)   # stop the spawned server (or just let GC do it)
+```
+
+Large models can take a while to load from disk; raise `timeout` (default 180s)
+if a 14B at Q8 doesn't come up in time:
+
+```{r, eval=FALSE, purl=FALSE}
+chat <- chat_llamar(model_path = "Qwen3-14B-Q8_0.gguf", timeout = 300)
+```
+
+### Mode B — connect to a running server
+
+If you already run a server (in another process, or a pool of them), pass its
+URL. No process is spawned.
+
+```{r, eval=FALSE, purl=FALSE}
+# In another process / shell:
+#   llama_serve_openai("model.gguf", port = 11434L)
+
+chat <- chat_llamar(base_url = "http://127.0.0.1:11434/v1")
+chat$chat("Hello!")
+```
+
+### System prompt
+
+```{r, eval=FALSE, purl=FALSE}
+chat <- chat_llamar(
+  model_path    = "Ministral-3B-Instruct.gguf",
+  system_prompt = "You are a concise assistant. Answer in one sentence."
+)
+chat$chat("What is R?")
+```
+
+> **Under the hood.** `chat_llamar()` wraps `ellmer::chat_vllm()`, which talks
+> to the server's `/v1/chat/completions` endpoint — the de-facto standard our
+> server implements. (ellmer's `chat_openai()` targets OpenAI's newer
+> `/v1/responses` API, which the server does not implement.)
+
+---
+
+## 2. The server: `llama_serve_openai()`
+
+`chat_llamar(model_path=)` is a convenience wrapper; you can run the server
+directly for non-R clients. It needs the optional **drogonR** package for the
+HTTP/SSE layer.
+
+```{r, eval=FALSE, purl=FALSE}
+llama_serve_openai("model.gguf", port = 11434L, n_ctx = 8192L)
+```
+
+It blocks, serving:
+
+* `GET /v1/models`
+* `POST /v1/chat/completions` (both blocking and `stream = true`)
+
+Point any OpenAI client at `http://127.0.0.1:11434/v1`:
+
+```bash
+curl http://127.0.0.1:11434/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"model","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+A runnable launcher lives at `inst/examples/serve_openai.R`.
+
+### Connecting OpenCode
+
+Add an OpenAI-compatible provider in `opencode.json` (see the one in this repo)
+with `baseURL` set to `http://127.0.0.1:11434/v1` and the model id matching what
+`/v1/models` reports.
+
+---
+
+## 3. The command-line example
+
+`inst/examples/chat.R` wraps both modes for the terminal:
+
+```bash
+# Spawn a server for the model and open an interactive prompt
+Rscript inst/examples/chat.R model.gguf
+
+# Positional [port] [n_ctx], plus flags
+Rscript inst/examples/chat.R model.gguf 11434 8192 \
+  --system "Be concise." --timeout 300
+
+# One-shot: a trailing message prints a single reply and exits
+Rscript inst/examples/chat.R model.gguf "Why is the sky blue?"
+
+# Connect to a server you already started
+Rscript inst/examples/chat.R --url http://127.0.0.1:11434/v1
+```
+
+In interactive mode, type a message and press Enter; a blank line or Ctrl-D
+quits. A spawned server is stopped automatically on exit.
+
+---
+
+## 4. ragnar: retrieval-augmented chat
+
+Because `chat_llamar()` returns a real `ellmer::Chat`, it plugs into
+[ragnar](https://ragnar.tidyverse.org/). Pair it with `embed_llamar()` (see
+`vignette("getting-started")`) for a fully local RAG stack: local embeddings
+for the store, local generation for the chat.
+
+```{r, eval=FALSE, purl=FALSE}
+library(ragnar)
+
+store <- ragnar_store_create(
+  location = "store.duckdb",
+  embed    = embed_llamar(model = "embedding-model.gguf")
+)
+ragnar_store_insert(store, documents)
+ragnar_store_build_index(store)
+
+chat <- chat_llamar(model_path = "Ministral-3B-Instruct.gguf")
+ragnar_register_tool_retrieve(chat, store)
+chat$chat("What do the documents say about X?")
+```
+
+> **Note.** Tool calling is mediated by the OpenAI protocol, so it works only
+> as far as the server implements it. The current server does not emit
+> `tool_calls` yet, so a model will not autonomously invoke the registered
+> retrieve tool. Plain chat and manual retrieval work today; automatic
+> tool-driven retrieval is on the roadmap (see `TODO.md`).
+
+---
+
+## 5. Concurrency
+
+The server is **single-sequence**: it handles one request at a time on the main
+R thread. That is enough for a single local user or agent. For parallel
+sessions, run a pool of servers on different ports and create one
+`chat_llamar(base_url=)` per worker — the worker-pool architecture is described
+in `TODO.md`.
+
+```{r, eval=FALSE, purl=FALSE}
+ports <- c(11434L, 11435L, 11436L)
+chats <- lapply(ports, function(p)
+  chat_llamar(base_url = sprintf("http://127.0.0.1:%d/v1", p)))
+```
+
+---
+
+## See also
+
+* `vignette("getting-started")` — the rest of the package.
+* `?chat_llamar`, `?llama_serve_openai`
+* `inst/examples/chat.R`, `inst/examples/serve_openai.R`

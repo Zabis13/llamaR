@@ -9,6 +9,9 @@ The package supports GPU acceleration via Vulkan, and automatically falls back t
 - Load and unload models in GGUF format (`llama_load_model`, `llama_free_model`)
 - Create and free contexts (`llama_new_context`, `llama_free_context`)
 - Tokenization, detokenization and text generation (`llama_tokenize`, `llama_detokenize`, `llama_generate`)
+- Streaming (token-by-token) generation (`llama_gen_begin`, `llama_gen_next`, `llama_gen_end`)
+- OpenAI-compatible HTTP server for local models (`llama_serve_openai`) — connect OpenCode, ellmer, the `openai` SDK, etc.
+- ellmer `Chat` objects backed by local models (`chat_llamar`) — use the ellmer/ragnar toolchain against local inference
 - Embedding extraction: single (`llama_embeddings`), batch (`llama_embed_batch`), ragnar-compatible (`embed_llamar`)
 - Hugging Face integration: download and cache models (`llama_hf_download`, `llama_load_model_hf`, etc.)
 - Encoder-decoder model support (T5, BART) via `llama_encode`
@@ -81,6 +84,21 @@ cat(result)
 # Free resources (optional, GC handles this automatically)
 llama_free_context(ctx)
 llama_free_model(model)
+```
+
+## Vignettes
+
+Two guides walk through the package in depth:
+
+- **Getting Started** — loading models, generation, chat templates,
+  tokenization, and embeddings.
+- **Chat and Agents** — `chat_llamar()`, the OpenAI-compatible server,
+  connecting OpenCode/ellmer, and retrieval-augmented chat with ragnar.
+
+```r
+browseVignettes("llamaR")
+vignette("getting-started", package = "llamaR")
+vignette("chat-and-agents", package = "llamaR")
 ```
 
 ## Downloading Models from Hugging Face
@@ -185,6 +203,79 @@ prompt <- llama_chat_apply_template(messages, template = tmpl)
 response <- llama_generate(ctx, prompt, max_new_tokens = 200L)
 cat(response)
 ```
+
+### Streaming Generation
+
+Pull tokens one at a time instead of waiting for the full result — useful for
+live output or feeding a stream. Concatenating every chunk reproduces the
+`llama_generate()` result for the same seed.
+
+```r
+st <- llama_gen_begin(ctx, "Once upon a time", max_new_tokens = 100L)
+repeat {
+  chunk <- llama_gen_next(st)   # next piece of text, or NULL when done
+  if (is.null(chunk)) break
+  cat(chunk)
+}
+cat(llama_gen_end(st))          # flush any held-back trailing bytes
+```
+
+### OpenAI-Compatible Server
+
+Serve a local model over an OpenAI-compatible HTTP API so any OpenAI client can
+talk to it. Requires the optional `drogonR` package
+(`install.packages("drogonR")`).
+
+```r
+# Blocks, serving GET /v1/models and POST /v1/chat/completions
+# (both blocking and stream = true). Default port 11434.
+llama_serve_openai("model.gguf", port = 11434L)
+```
+
+Point any OpenAI client at `http://127.0.0.1:11434/v1`, e.g.:
+
+```bash
+curl http://127.0.0.1:11434/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"model","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+A runnable example lives at `inst/examples/serve_openai.R`:
+
+```bash
+# Just serve:  args are <model.gguf> [port] [n_ctx]
+Rscript inst/examples/serve_openai.R model.gguf 11434 16384
+
+# Or self-test both endpoints end-to-end (needs callr + curl):
+Rscript inst/examples/serve_openai.R model.gguf --selftest
+```
+
+To connect [OpenCode](https://opencode.ai), add an OpenAI-compatible provider in
+`opencode.json` (see the one in this repo) pointing `baseURL` at
+`http://127.0.0.1:11434/v1`, with the model id matching what `/v1/models`
+reports.
+
+### Chatting via ellmer
+
+`chat_llamar()` returns an [ellmer](https://ellmer.tidyverse.org/) `Chat`
+object backed by a local model, so the whole ellmer / ragnar toolchain works
+against local inference. Requires the optional `ellmer` package (and `callr`
+when spawning a server).
+
+```r
+# Spawn a server for this model and chat with it; the background process is
+# tied to the returned object (stop it with chat_llamar_stop(), or let GC).
+chat <- chat_llamar(model_path = "model.gguf")
+chat$chat("Why is the sky blue?")
+chat_llamar_stop(chat)
+
+# Or connect to a server you already started with llama_serve_openai():
+chat <- chat_llamar(base_url = "http://127.0.0.1:11434/v1")
+chat$chat("Hello!")
+```
+
+It wraps `ellmer::chat_vllm()`, talking to the server's
+`/v1/chat/completions` endpoint.
 
 ### Tokenization
 

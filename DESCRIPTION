@@ -1,7 +1,7 @@
 Package: llamaR
 Type: Package
 Title: Interface for Large Language Models via 'llama.cpp'
-Version: 0.2.3
+Version: 0.2.4
 Authors@R: c(
     person("Yuri", "Baramykov", email = "lbsbmsu@mail.ru", role = c("aut", "cre"),
            comment = c(ORCID = "0009-0000-7627-4217")),
@@ -29,6 +29,13 @@ Imports:
     utils
 Suggests:
     testthat (>= 3.0.0),
-    withr
+    withr,
+    drogonR,
+    later,
+    ellmer,
+    callr,
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3

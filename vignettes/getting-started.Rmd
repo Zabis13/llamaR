@@ -1,0 +1,187 @@
+---
+title: "Getting Started with llamaR"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting Started with llamaR}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE, purl=FALSE}
+# Every chunk needs a GGUF model (and usually a GPU), so this vignette is
+# static: the code is shown but not run at build time.
+knitr::opts_chunk$set(eval = FALSE, purl = FALSE)
+```
+
+llamaR provides R bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp)
+for running Large Language Models locally, with optional Vulkan GPU acceleration
+via [ggmlR](https://github.com/Zabis13/ggmlR). This vignette walks through the
+core workflow: get a model, load it, generate text, tokenize, and extract
+embeddings. For the chat/server side see `vignette("chat-and-agents")`.
+
+```{r, eval=FALSE, purl=FALSE}
+library(llamaR)
+```
+
+---
+
+## 1. Getting a model
+
+llamaR works with GGUF files. Download one from the Hugging Face Hub (cached
+under `~/.cache/llamaR/` by default):
+
+```{r, eval=FALSE, purl=FALSE}
+# List the GGUF files in a repo
+llama_hf_list("TheBloke/Mistral-7B-Instruct-v0.2-GGUF")
+
+# Download one (by filename or by quantization pattern)
+path <- llama_hf_download(
+  "TheBloke/Mistral-7B-Instruct-v0.2-GGUF",
+  pattern = "Q4_K_M"
+)
+```
+
+Or point at any GGUF file you already have on disk.
+
+---
+
+## 2. Loading a model and creating a context
+
+A **model** holds the weights; a **context** holds the working state (KV cache)
+for one generation session. Both are external pointers with GC finalizers, so
+explicit freeing is optional.
+
+```{r, eval=FALSE, purl=FALSE}
+model <- llama_load_model(path, n_gpu_layers = -1L)   # -1 = offload all layers
+ctx   <- llama_new_context(model, n_ctx = 4096L)
+
+llama_model_info(model)   # size, n_params, context length, heads, ...
+```
+
+`n_gpu_layers = -1L` offloads every layer to the GPU when Vulkan is available,
+and falls back to CPU otherwise.
+
+---
+
+## 3. Generating text
+
+```{r, eval=FALSE, purl=FALSE}
+llama_generate(ctx, "The capital of France is", max_new_tokens = 32L)
+```
+
+Sampling is controlled by arguments (set `temp = 0` for greedy decoding):
+
+```{r, eval=FALSE, purl=FALSE}
+llama_generate(
+  ctx, "Write a haiku about autumn.",
+  max_new_tokens = 64L,
+  temp           = 0.7,
+  top_p          = 0.9,
+  top_k          = 40L,
+  repeat_penalty = 1.1
+)
+```
+
+Pass `with_timings = TRUE` to get token throughput alongside the text.
+
+---
+
+## 4. Chat models and templates
+
+Instruction-tuned models expect their prompt wrapped in a chat template
+(`[INST]…[/INST]`, `<|im_start|>…`, etc.). `llama_chat_apply_template()` builds
+that prompt from a list of role/content messages:
+
+```{r, eval=FALSE, purl=FALSE}
+messages <- list(
+  list(role = "system",    content = "You are a helpful assistant."),
+  list(role = "user",      content = "Name three primary colors.")
+)
+
+prompt <- llama_chat_apply_template(messages)   # uses the model's built-in template
+llama_generate(ctx, prompt, max_new_tokens = 64L)
+```
+
+For multi-turn chat with history management, use `chat_llamar()` instead — see
+`vignette("chat-and-agents")`.
+
+---
+
+## 5. Tokenization
+
+```{r, eval=FALSE, purl=FALSE}
+tokens <- llama_tokenize(ctx, "Hello, world!")
+tokens
+
+llama_detokenize(ctx, tokens)
+```
+
+When tokenizing a prompt that already contains role markers from a chat
+template, set `parse_special = TRUE` so markers like `[INST]` become single
+control tokens rather than literal characters:
+
+```{r, eval=FALSE, purl=FALSE}
+prompt <- llama_chat_apply_template(list(list(role = "user", content = "hi")))
+llama_tokenize(ctx, prompt, parse_special = TRUE)
+```
+
+---
+
+## 6. Embeddings
+
+Create the context in **embedding mode**, then extract vectors. Single text:
+
+```{r, eval=FALSE, purl=FALSE}
+emb_model <- llama_load_model("embedding-model.gguf")
+emb_ctx   <- llama_new_context(emb_model, embedding = TRUE)
+
+v <- llama_embeddings(emb_ctx, "The quick brown fox")
+length(v)
+```
+
+A batch of texts in one call:
+
+```{r, eval=FALSE, purl=FALSE}
+m <- llama_embed_batch(emb_ctx, c("first text", "second text", "third text"))
+dim(m)   # one row per input
+```
+
+### ragnar-compatible provider
+
+`embed_llamar()` is a higher-level helper that loads the model for you and
+returns a provider suitable for `ragnar_store_create(embed = ...)`. Called with
+a model only, it returns a closure (partial application); called with text, it
+returns a matrix.
+
+```{r, eval=FALSE, purl=FALSE}
+library(ragnar)
+
+store <- ragnar_store_create(
+  location = "store.duckdb",
+  embed    = embed_llamar(model = "embedding-model.gguf", n_gpu_layers = -1L)
+)
+ragnar_store_insert(store, documents)
+ragnar_store_build_index(store)
+ragnar_retrieve(store, "search query")
+```
+
+Combine this with a local `chat_llamar()` for a fully local RAG stack — see
+`vignette("chat-and-agents")`.
+
+---
+
+## 7. Serving and chatting
+
+To talk to a model over HTTP, or to use it through the ellmer/ragnar toolchain,
+see `vignette("chat-and-agents")`:
+
+* `llama_serve_openai()` — OpenAI-compatible HTTP server.
+* `chat_llamar()` — an `ellmer::Chat` backed by a local model.
+
+---
+
+## See also
+
+* `vignette("chat-and-agents")` — server, ellmer, ragnar, OpenCode.
+* `?llama_generate`, `?llama_chat_apply_template`, `?embed_llamar`
+* The package README for installation and GPU/Vulkan setup.

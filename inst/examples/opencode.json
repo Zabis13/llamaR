@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llamar": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llamaR (local)",
+      "options": {
+        "baseURL": "http://127.0.0.1:11434/v1",
+        "apiKey": "local"
+      },
+      "models": {
+        "Ministral-3-3B-Instruct-2512-Q4_K_M": {
+          "name": "Ministral-3B (llamaR)",
+          "limit": { "context": 16384, "output": 8192 }
+        }
+      }
+    }
+  }
+}

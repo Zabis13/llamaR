@@ -329,6 +329,56 @@ test_that("greedy generation is deterministic", {
 })
 
 # ============================================================
+# Streaming generation (gen_begin / gen_next / gen_end)
+# ============================================================
+
+test_that("streamed chunks concatenate to llama_generate output", {
+    skip_if_no_model()
+
+    prompt <- "Once upon a time"
+    args <- list(max_new_tokens = 30L, temp = 0.0)
+
+    full <- do.call(llama_generate, c(list(shared_ctx, prompt), args))
+
+    st <- do.call(llama_gen_begin, c(list(shared_ctx, prompt), args))
+    chunks <- character(0)
+    repeat {
+        chunk <- llama_gen_next(st)
+        if (is.null(chunk)) break
+        chunks <- c(chunks, chunk)
+    }
+    chunks <- c(chunks, llama_gen_end(st))
+    streamed <- paste0(chunks, collapse = "")
+
+    expect_equal(streamed, full)
+})
+
+test_that("every streamed chunk is valid UTF-8", {
+    skip_if_no_model()
+
+    st <- llama_gen_begin(shared_ctx, "The capital of France is",
+                          max_new_tokens = 20L, temp = 0.0)
+    repeat {
+        chunk <- llama_gen_next(st)
+        if (is.null(chunk)) break
+        expect_true(is.character(chunk) && length(chunk) == 1)
+        expect_false(is.na(validUTF8(chunk)) || !validUTF8(chunk))
+    }
+    llama_gen_end(st)
+})
+
+test_that("gen_next returns NULL after generation finishes", {
+    skip_if_no_model()
+
+    st <- llama_gen_begin(shared_ctx, "Hi", max_new_tokens = 3L, temp = 0.0)
+    repeat {
+        if (is.null(llama_gen_next(st))) break
+    }
+    expect_null(llama_gen_next(st))
+    expect_true(is.character(llama_gen_end(st)))
+})
+
+# ============================================================
 # Advanced sampling
 # ============================================================
 

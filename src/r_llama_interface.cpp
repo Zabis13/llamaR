@@ -65,6 +65,25 @@ static void context_finalizer(SEXP x) {
     }
 }
 
+// Streaming generation state (token-by-token), see r_llama_gen_* below.
+struct llama_gen_state {
+    llama_context *      ctx   = NULL;   // borrowed, not owned
+    const llama_vocab *  vocab = NULL;   // borrowed
+    llama_sampler *      smpl  = NULL;   // owned, freed by finalizer
+    int                  n_remaining = 0;
+    bool                 done  = false;
+    std::string          utf8_buf;       // bytes of an incomplete trailing UTF-8 char
+};
+
+static void gen_state_finalizer(SEXP x) {
+    llama_gen_state * st = (llama_gen_state *) R_ExternalPtrAddr(x);
+    if (st) {
+        if (st->smpl) llama_sampler_free(st->smpl);
+        delete st;
+        R_SetExternalPtrAddr(x, NULL);
+    }
+}
+
 // ============================================================
 // Version
 // ============================================================
@@ -319,23 +338,25 @@ extern "C" SEXP r_llama_free_context(SEXP r_ctx) {
 // Tokenize / Detokenize
 // ============================================================
 
-extern "C" SEXP r_llama_tokenize(SEXP r_ctx, SEXP r_text, SEXP r_add_special) {
+extern "C" SEXP r_llama_tokenize(SEXP r_ctx, SEXP r_text, SEXP r_add_special,
+                                 SEXP r_parse_special) {
     llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
     if (!ctx) Rf_error("llamaR: invalid context pointer");
 
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
-    const char * text       = CHAR(STRING_ELT(r_text, 0));
-    bool         add_special = LOGICAL(r_add_special)[0] != 0;
-    int          text_len   = (int) strlen(text);
+    const char * text          = CHAR(STRING_ELT(r_text, 0));
+    bool         add_special   = LOGICAL(r_add_special)[0] != 0;
+    bool         parse_special = LOGICAL(r_parse_special)[0] != 0;
+    int          text_len      = (int) strlen(text);
 
     // first pass: get required buffer size (returns negative on "need more space")
-    int n_tokens = llama_tokenize(vocab, text, text_len, NULL, 0, add_special, false);
+    int n_tokens = llama_tokenize(vocab, text, text_len, NULL, 0, add_special, parse_special);
     if (n_tokens < 0) n_tokens = -n_tokens;
 
     std::vector<llama_token> tokens(n_tokens);
-    int actual = llama_tokenize(vocab, text, text_len, tokens.data(), n_tokens, add_special, false);
+    int actual = llama_tokenize(vocab, text, text_len, tokens.data(), n_tokens, add_special, parse_special);
     if (actual < 0) {
         Rf_error("llamaR: tokenization failed");
     }
@@ -426,7 +447,10 @@ extern "C" SEXP r_llama_generate(SEXP r_ctx, SEXP r_prompt,
     auto tic = clk::now();
 
     // --- tokenize prompt ---
-    int n_tokens = llama_tokenize(vocab, prompt, prompt_len, NULL, 0, true, false);
+    // parse_special = true: the prompt has already been through the chat
+    // template, so role markers like [INST]/<|im_start|> are control tokens
+    // and must be parsed as such, not split into literal characters.
+    int n_tokens = llama_tokenize(vocab, prompt, prompt_len, NULL, 0, true, true);
     if (n_tokens < 0) n_tokens = -n_tokens;
     if (n_tokens == 0) {
         Rf_error("llamaR: prompt produced zero tokens");
@@ -434,7 +458,7 @@ extern "C" SEXP r_llama_generate(SEXP r_ctx, SEXP r_prompt,
 
     std::vector<llama_token> prompt_tokens(n_tokens);
     int actual = llama_tokenize(vocab, prompt, prompt_len,
-                                prompt_tokens.data(), n_tokens, true, false);
+                                prompt_tokens.data(), n_tokens, true, true);
     if (actual < 0) Rf_error("llamaR: tokenization failed");
     n_tokens = actual;
 
@@ -497,11 +521,22 @@ extern "C" SEXP r_llama_generate(SEXP r_ctx, SEXP r_prompt,
         tic = clk::now();
     }
 
-    // --- prefill: dispatch ---
-    struct llama_batch batch = llama_batch_get_one(prompt_tokens.data(), n_tokens);
-    if (llama_decode(ctx, batch) != 0) {
-        llama_sampler_free(smpl);
-        Rf_error("llamaR: failed to process prompt");
+    // --- prefill: dispatch (chunked by n_batch) ---
+    // A single llama_decode carries at most n_batch tokens; split long
+    // prompts so we never trip llama.cpp's n_tokens <= n_batch assert.
+    struct llama_batch batch;
+    {
+        int n_batch = (int) llama_n_batch(ctx);
+        if (n_batch <= 0) n_batch = n_tokens;
+        for (int off = 0; off < n_tokens; off += n_batch) {
+            int n_chunk = (n_tokens - off < n_batch) ? (n_tokens - off) : n_batch;
+            batch = llama_batch_get_one(prompt_tokens.data() + off, n_chunk);
+            if (llama_decode(ctx, batch) != 0) {
+                llama_sampler_free(smpl);
+                Rf_error("llamaR: failed to process prompt (chunk at offset %d of %d)",
+                         off, n_tokens);
+            }
+        }
     }
 
     if (with_timings) {
@@ -655,6 +690,208 @@ extern "C" SEXP r_llama_generate(SEXP r_ctx, SEXP r_prompt,
         Rf_setAttrib(r_text, Rf_install("timings"), timings);
         UNPROTECT(2);
     }
+    UNPROTECT(1);
+    return r_text;
+}
+
+// ============================================================
+// Streaming generation: begin / next / end (token-by-token)
+// ============================================================
+//
+// Splits r_llama_generate into three calls so callers can pull one chunk of
+// text at a time (e.g. to push into an SSE stream). State lives in an
+// externalptr with a GC finalizer that frees the sampler chain.
+
+// Length in bytes of the trailing run of bytes in `s` that forms an
+// incomplete (truncated) UTF-8 sequence. Returns 0 when `s` ends on a
+// complete character. Only the final, still-growing code point is held back.
+static size_t utf8_incomplete_tail(const std::string & s) {
+    size_t n = s.size();
+    // Scan back over continuation bytes (10xxxxxx) to find the last lead byte.
+    size_t i = n;
+    while (i > 0) {
+        unsigned char c = (unsigned char) s[i - 1];
+        if ((c & 0xC0) != 0x80) {  // not a continuation byte: this is the lead
+            i--;
+            break;
+        }
+        i--;
+    }
+    if (i >= n) return 0;  // last byte was itself a lead with no body, handled below
+    unsigned char lead = (unsigned char) s[i];
+    size_t need;
+    if      ((lead & 0x80) == 0x00) need = 1;  // 0xxxxxxx
+    else if ((lead & 0xE0) == 0xC0) need = 2;  // 110xxxxx
+    else if ((lead & 0xF0) == 0xE0) need = 3;  // 1110xxxx
+    else if ((lead & 0xF8) == 0xF0) need = 4;  // 11110xxx
+    else return 0;                             // stray continuation byte: emit as-is
+    size_t have = n - i;
+    return have < need ? have : 0;  // hold back only if the char is unfinished
+}
+
+extern "C" SEXP r_llama_gen_begin(SEXP r_ctx, SEXP r_prompt,
+                                  SEXP r_max_new_tokens, SEXP r_temp,
+                                  SEXP r_top_k, SEXP r_top_p, SEXP r_seed,
+                                  SEXP r_min_p, SEXP r_typical_p,
+                                  SEXP r_repeat_penalty, SEXP r_repeat_last_n,
+                                  SEXP r_frequency_penalty, SEXP r_presence_penalty,
+                                  SEXP r_mirostat, SEXP r_mirostat_tau,
+                                  SEXP r_mirostat_eta, SEXP r_grammar) {
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    const char * prompt         = CHAR(STRING_ELT(r_prompt, 0));
+    int          max_new_tokens = INTEGER(r_max_new_tokens)[0];
+    float        temp           = (float) REAL(r_temp)[0];
+    int          top_k          = INTEGER(r_top_k)[0];
+    float        top_p          = (float) REAL(r_top_p)[0];
+    uint32_t     seed           = (uint32_t) INTEGER(r_seed)[0];
+    float        min_p          = (float) REAL(r_min_p)[0];
+    float        typical_p      = (float) REAL(r_typical_p)[0];
+    float        repeat_penalty = (float) REAL(r_repeat_penalty)[0];
+    int          repeat_last_n  = INTEGER(r_repeat_last_n)[0];
+    float        freq_penalty   = (float) REAL(r_frequency_penalty)[0];
+    float        pres_penalty   = (float) REAL(r_presence_penalty)[0];
+    int          mirostat       = INTEGER(r_mirostat)[0];
+    float        mirostat_tau   = (float) REAL(r_mirostat_tau)[0];
+    float        mirostat_eta   = (float) REAL(r_mirostat_eta)[0];
+    const char * grammar        = Rf_isNull(r_grammar) ? NULL : CHAR(STRING_ELT(r_grammar, 0));
+
+    int prompt_len = (int) strlen(prompt);
+
+    // --- tokenize prompt ---
+    // parse_special = true: prompt has been through the chat template, so its
+    // role markers are control tokens (see r_llama_generate for rationale).
+    int n_tokens = llama_tokenize(vocab, prompt, prompt_len, NULL, 0, true, true);
+    if (n_tokens < 0) n_tokens = -n_tokens;
+    if (n_tokens == 0) Rf_error("llamaR: prompt produced zero tokens");
+
+    std::vector<llama_token> prompt_tokens(n_tokens);
+    int actual = llama_tokenize(vocab, prompt, prompt_len,
+                                prompt_tokens.data(), n_tokens, true, true);
+    if (actual < 0) Rf_error("llamaR: tokenization failed");
+    n_tokens = actual;
+
+    // --- build sampler chain (identical to r_llama_generate) ---
+    auto sparams = llama_sampler_chain_default_params();
+    llama_sampler * smpl = llama_sampler_chain_init(sparams);
+
+    if (grammar && strlen(grammar) > 0) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_grammar(vocab, grammar, "root"));
+    }
+    if (repeat_penalty != 1.0f || freq_penalty != 0.0f || pres_penalty != 0.0f) {
+        llama_sampler_chain_add(smpl,
+            llama_sampler_init_penalties(repeat_last_n, repeat_penalty, freq_penalty, pres_penalty));
+    }
+    if (mirostat == 0) {
+        if (top_k > 0)     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k));
+        if (min_p > 0.0f)  llama_sampler_chain_add(smpl, llama_sampler_init_min_p(min_p, 1));
+        if (typical_p < 1.0f) llama_sampler_chain_add(smpl, llama_sampler_init_typical(typical_p, 1));
+        if (top_p < 1.0f)  llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p, 1));
+        if (temp > 0.0f)   llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp));
+        if (temp > 0.0f)   llama_sampler_chain_add(smpl, llama_sampler_init_dist(seed));
+        else               llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+    } else if (mirostat == 1) {
+        int n_vocab_size = llama_vocab_n_tokens(vocab);
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp > 0.0f ? temp : 0.8f));
+        llama_sampler_chain_add(smpl, llama_sampler_init_mirostat(n_vocab_size, seed, mirostat_tau, mirostat_eta, 100));
+    } else if (mirostat == 2) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp > 0.0f ? temp : 0.8f));
+        llama_sampler_chain_add(smpl, llama_sampler_init_mirostat_v2(seed, mirostat_tau, mirostat_eta));
+    }
+
+    // --- clear KV cache and prefill the prompt ---
+    // Split the prefill into chunks of at most n_batch tokens: a single
+    // llama_decode call may carry no more than n_batch tokens (llama.cpp
+    // asserts otherwise). Positions continue automatically across calls
+    // since the KV cache was just cleared and grows with each decode.
+    llama_memory_clear(llama_get_memory(ctx), true);
+    int n_batch = (int) llama_n_batch(ctx);
+    if (n_batch <= 0) n_batch = n_tokens;
+    for (int off = 0; off < n_tokens; off += n_batch) {
+        int n_chunk = (n_tokens - off < n_batch) ? (n_tokens - off) : n_batch;
+        struct llama_batch batch = llama_batch_get_one(prompt_tokens.data() + off, n_chunk);
+        if (llama_decode(ctx, batch) != 0) {
+            llama_sampler_free(smpl);
+            Rf_error("llamaR: failed to process prompt (chunk at offset %d of %d)",
+                     off, n_tokens);
+        }
+    }
+
+    llama_gen_state * st = new llama_gen_state();
+    st->ctx         = ctx;
+    st->vocab       = vocab;
+    st->smpl        = smpl;
+    st->n_remaining = max_new_tokens;
+    st->done        = false;
+
+    SEXP ptr = PROTECT(R_MakeExternalPtr(st, Rf_install("llama_gen_state"), R_NilValue));
+    R_RegisterCFinalizerEx(ptr, gen_state_finalizer, TRUE);
+    UNPROTECT(1);
+    return ptr;
+}
+
+// One generation step. Returns a length-1 character vector with the next
+// chunk of text (possibly ""), or NULL when generation is finished (EOG
+// reached or token budget exhausted). Holds back an incomplete trailing
+// UTF-8 char until the next call; r_llama_gen_end() flushes any remainder.
+extern "C" SEXP r_llama_gen_next(SEXP r_state) {
+    llama_gen_state * st = (llama_gen_state *) R_ExternalPtrAddr(r_state);
+    if (!st) Rf_error("llamaR: invalid generation state pointer");
+    if (st->done || st->n_remaining <= 0) {
+        st->done = true;
+        return R_NilValue;
+    }
+
+    llama_token tok = llama_sampler_sample(st->smpl, st->ctx, -1);
+    if (llama_vocab_is_eog(st->vocab, tok)) {
+        st->done = true;
+        return R_NilValue;
+    }
+
+    llama_sampler_accept(st->smpl, tok);
+    st->n_remaining--;
+
+    // detokenize this single token, appending to the UTF-8 carry buffer
+    char piece[256];
+    int np = llama_token_to_piece(st->vocab, tok, piece, sizeof(piece), 0, false);
+    if (np < 0) {
+        std::vector<char> big(-np);
+        np = llama_token_to_piece(st->vocab, tok, big.data(), (int) big.size(), 0, false);
+        if (np > 0) st->utf8_buf.append(big.data(), np);
+    } else if (np > 0) {
+        st->utf8_buf.append(piece, np);
+    }
+
+    // decode the accepted token to advance the context for the next step
+    struct llama_batch batch = llama_batch_get_one(&tok, 1);
+    if (llama_decode(st->ctx, batch) != 0) {
+        st->done = true;
+        Rf_error("llamaR: failed during token generation");
+    }
+
+    // emit everything except a possibly-incomplete trailing UTF-8 char
+    size_t tail = utf8_incomplete_tail(st->utf8_buf);
+    size_t emit = st->utf8_buf.size() - tail;
+    SEXP r_text = PROTECT(Rf_ScalarString(
+        Rf_mkCharLenCE(st->utf8_buf.data(), (int) emit, CE_UTF8)));
+    st->utf8_buf.erase(0, emit);
+    UNPROTECT(1);
+    return r_text;
+}
+
+// Flush any bytes still held in the carry buffer and mark the state done.
+// Safe to call multiple times. The sampler is freed by the GC finalizer.
+extern "C" SEXP r_llama_gen_end(SEXP r_state) {
+    llama_gen_state * st = (llama_gen_state *) R_ExternalPtrAddr(r_state);
+    if (!st) Rf_error("llamaR: invalid generation state pointer");
+    st->done = true;
+    SEXP r_text = PROTECT(Rf_ScalarString(
+        Rf_mkCharLenCE(st->utf8_buf.data(), (int) st->utf8_buf.size(), CE_UTF8)));
+    st->utf8_buf.clear();
     UNPROTECT(1);
     return r_text;
 }
@@ -1006,13 +1243,18 @@ extern "C" SEXP r_llama_embeddings(SEXP r_ctx, SEXP r_text) {
     }
 
     int n_embd = llama_model_n_embd(model);
+
+    // Copy out of the context's embedding buffer, then reset the flag, before
+    // building the R result — keeps r_result from being live across the
+    // llama_set_embeddings call (which rchk flags as allocating).
+    std::vector<float> emb_copy(emb, emb + n_embd);
+    llama_set_embeddings(ctx, false);
+
     SEXP r_result = PROTECT(Rf_allocVector(REALSXP, n_embd));
     for (int i = 0; i < n_embd; i++) {
-        REAL(r_result)[i] = (double) emb[i];
+        REAL(r_result)[i] = (double) emb_copy[i];
     }
     UNPROTECT(1);
-
-    llama_set_embeddings(ctx, false);
     return r_result;
 }
 
@@ -1214,19 +1456,28 @@ extern "C" SEXP r_llama_chat_apply_template(SEXP r_tmpl, SEXP r_messages, SEXP r
     std::vector<std::string> roles(n_msg);
     std::vector<std::string> contents(n_msg);
 
+    // Cache the symbols so Rf_install (an allocating call) runs once up front,
+    // not inside the loop where r_role/r_content would be live across it.
+    SEXP sym_role = Rf_install("role");
+    SEXP sym_content = Rf_install("content");
+
     for (int i = 0; i < n_msg; i++) {
         SEXP msg = VECTOR_ELT(r_messages, i);
-        SEXP r_role = Rf_getAttrib(msg, Rf_install("role"));
-        SEXP r_content = Rf_getAttrib(msg, Rf_install("content"));
 
-        // Try list element access if attributes don't work
-        if (Rf_isNull(r_role)) {
-            r_role = VECTOR_ELT(msg, 0);
-            r_content = VECTOR_ELT(msg, 1);
+        // Resolve role and content independently and extract each string
+        // immediately, so no SEXP is held live across another allocating call
+        // (PROTECT-wise rchk-clean). r_role/r_content are scoped per branch.
+        {
+            SEXP r_role = Rf_getAttrib(msg, sym_role);
+            if (Rf_isNull(r_role)) r_role = VECTOR_ELT(msg, 0);
+            roles[i] = CHAR(STRING_ELT(r_role, 0));
+        }
+        {
+            SEXP r_content = Rf_getAttrib(msg, sym_content);
+            if (Rf_isNull(r_content)) r_content = VECTOR_ELT(msg, 1);
+            contents[i] = CHAR(STRING_ELT(r_content, 0));
         }
 
-        roles[i] = CHAR(STRING_ELT(r_role, 0));
-        contents[i] = CHAR(STRING_ELT(r_content, 0));
         messages[i].role = roles[i].c_str();
         messages[i].content = contents[i].c_str();
     }
@@ -1541,12 +1792,22 @@ extern "C" SEXP r_llama_set_abort_callback(SEXP r_ctx, SEXP r_fn) {
     llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
     if (!ctx) Rf_error("llamaR: invalid context pointer");
 
-    if (r_fn == R_NilValue) {
-        // Clear callback
+    // Validate before mutating any state, so an error leaves the old callback
+    // intact rather than half-replaced.
+    if (r_fn != R_NilValue && !Rf_isFunction(r_fn)) {
+        Rf_error("llamaR: abort_callback must be a function or NULL");
+    }
+
+    // Release the previously preserved callback (if any) before replacing it,
+    // otherwise it leaks on the precious list and stays alive forever.
+    if (s_abort_callback != R_NilValue) {
+        R_ReleaseObject(s_abort_callback);
         s_abort_callback = R_NilValue;
+    }
+
+    if (r_fn == R_NilValue) {
         llama_set_abort_callback(ctx, NULL, NULL);
     } else {
-        if (!Rf_isFunction(r_fn)) Rf_error("llamaR: abort_callback must be a function or NULL");
         s_abort_callback = r_fn;
         R_PreserveObject(s_abort_callback);
         llama_set_abort_callback(ctx, r_abort_callback, NULL);
@@ -1894,7 +2155,8 @@ extern "C" SEXP r_llama_batch_init(SEXP r_n_tokens, SEXP r_embd, SEXP r_n_seq_ma
     struct llama_batch * batch = new llama_batch;
     *batch = llama_batch_init(n_tokens, embd, n_seq_max);
 
-    SEXP result = PROTECT(R_MakeExternalPtr(batch, Rf_mkString("llama_batch"), R_NilValue));
+    SEXP tag = PROTECT(Rf_mkString("llama_batch"));
+    SEXP result = PROTECT(R_MakeExternalPtr(batch, tag, R_NilValue));
     R_RegisterCFinalizer(result, [](SEXP x) {
         llama_batch * b = (llama_batch *) R_ExternalPtrAddr(x);
         if (b) {
@@ -1903,7 +2165,7 @@ extern "C" SEXP r_llama_batch_init(SEXP r_n_tokens, SEXP r_embd, SEXP r_n_seq_ma
             R_SetExternalPtrAddr(x, NULL);
         }
     });
-    UNPROTECT(1);
+    UNPROTECT(2);
     return result;
 }
 
@@ -2011,7 +2273,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"r_llama_set_n_threads",         (DL_FUNC) &r_llama_set_n_threads,         3},
     {"r_llama_set_causal_attn",       (DL_FUNC) &r_llama_set_causal_attn,       2},
     // Tokenize / Detokenize / Token piece
-    {"r_llama_tokenize",              (DL_FUNC) &r_llama_tokenize,              3},
+    {"r_llama_tokenize",              (DL_FUNC) &r_llama_tokenize,              4},
     {"r_llama_detokenize",            (DL_FUNC) &r_llama_detokenize,            2},
     {"r_llama_token_to_piece",        (DL_FUNC) &r_llama_token_to_piece,        3},
     // Batch
@@ -2021,6 +2283,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"r_llama_encode",                (DL_FUNC) &r_llama_encode,                2},
     // Generate
     {"r_llama_generate",              (DL_FUNC) &r_llama_generate,              18},
+    {"r_llama_gen_begin",             (DL_FUNC) &r_llama_gen_begin,             17},
+    {"r_llama_gen_next",              (DL_FUNC) &r_llama_gen_next,              1},
+    {"r_llama_gen_end",               (DL_FUNC) &r_llama_gen_end,               1},
     {"r_llama_generate_batch",        (DL_FUNC) &r_llama_generate_batch,        14},
     // Embeddings & Logits
     {"r_llama_embeddings",            (DL_FUNC) &r_llama_embeddings,            2},

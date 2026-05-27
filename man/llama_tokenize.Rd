@@ -4,7 +4,7 @@
 \alias{llama_tokenize}
 \title{Tokenize text into token IDs}
 \usage{
-llama_tokenize(ctx, text, add_special = TRUE)
+llama_tokenize(ctx, text, add_special = TRUE, parse_special = FALSE)
 }
 \arguments{
 \item{ctx}{Context handle returned by [llama_new_context]}
@@ -12,6 +12,12 @@ llama_tokenize(ctx, text, add_special = TRUE)
 \item{text}{Character string to tokenize}
 
 \item{add_special}{Whether to add special tokens (BOS/EOS) as configured by the model}
+
+\item{parse_special}{Whether to parse control/special tokens (e.g. Mistral's
+\code{[INST]}, ChatML's \code{<|im_start|>}) as single tokens rather than
+as their literal characters. Use \code{TRUE} for a prompt produced by
+[llama_chat_apply_template]; the default \code{FALSE} treats such markup as
+plain text.}
 }
 \value{
 An integer vector of token IDs as used by the model's vocabulary.
@@ -30,5 +36,9 @@ print(tokens)
 
 # Without special tokens
 tokens <- llama_tokenize(ctx, "Hello", add_special = FALSE)
+
+# Parse a templated prompt's role markers as control tokens
+prompt <- llama_chat_apply_template(list(list(role = "user", content = "hi")))
+tokens <- llama_tokenize(ctx, prompt, parse_special = TRUE)
 }
 }

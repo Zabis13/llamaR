@@ -330,6 +330,11 @@ llama_free_context <- function(ctx) {
 #' @param ctx Context handle returned by [llama_new_context]
 #' @param text Character string to tokenize
 #' @param add_special Whether to add special tokens (BOS/EOS) as configured by the model
+#' @param parse_special Whether to parse control/special tokens (e.g. Mistral's
+#'   \code{[INST]}, ChatML's \code{<|im_start|>}) as single tokens rather than
+#'   as their literal characters. Use \code{TRUE} for a prompt produced by
+#'   [llama_chat_apply_template]; the default \code{FALSE} treats such markup as
+#'   plain text.
 #' @return An integer vector of token IDs as used by the model's vocabulary.
 #' @export
 #' @examples
@@ -343,10 +348,15 @@ llama_free_context <- function(ctx) {
 #'
 #' # Without special tokens
 #' tokens <- llama_tokenize(ctx, "Hello", add_special = FALSE)
+#'
+#' # Parse a templated prompt's role markers as control tokens
+#' prompt <- llama_chat_apply_template(list(list(role = "user", content = "hi")))
+#' tokens <- llama_tokenize(ctx, prompt, parse_special = TRUE)
 #' }
-llama_tokenize <- function(ctx, text, add_special = TRUE) {
+llama_tokenize <- function(ctx, text, add_special = TRUE, parse_special = FALSE) {
     stopifnot(is.character(text), length(text) == 1)
-    .Call("r_llama_tokenize", ctx, text, as.logical(add_special))
+    .Call("r_llama_tokenize", ctx, text,
+          as.logical(add_special), as.logical(parse_special))
 }
 
 #' Detokenize token IDs back to text
@@ -444,6 +454,88 @@ llama_generate <- function(ctx, prompt, max_new_tokens = 256L,
           as.double(frequency_penalty), as.double(presence_penalty),
           as.integer(mirostat), as.double(mirostat_tau), as.double(mirostat_eta),
           grammar, as.logical(with_timings))
+}
+
+#' Begin a streaming (token-by-token) generation
+#'
+#' Sets up sampling and prefills the prompt, returning an opaque state handle
+#' that is pulled one chunk at a time with [llama_gen_next]. This is the
+#' streaming counterpart to [llama_generate]: same sampler chain and the same
+#' output for a given seed, but text arrives incrementally so it can be pushed
+#' into an SSE stream as it is produced.
+#'
+#' Typical loop:
+#' \preformatted{
+#' st <- llama_gen_begin(ctx, prompt)
+#' repeat {
+#'   chunk <- llama_gen_next(st)
+#'   if (is.null(chunk)) break
+#'   cat(chunk)
+#' }
+#' cat(llama_gen_end(st))  # flush any held-back trailing bytes
+#' }
+#'
+#' Only one streaming generation may be active per context at a time: each
+#' call to \code{llama_gen_begin} clears the context KV cache.
+#'
+#' @inheritParams llama_generate
+#' @return An external pointer holding the generation state. Pass it to
+#'   [llama_gen_next] and [llama_gen_end]. The underlying sampler is freed
+#'   automatically by the garbage collector.
+#' @seealso [llama_gen_next], [llama_gen_end], [llama_generate]
+#' @export
+llama_gen_begin <- function(ctx, prompt, max_new_tokens = 256L,
+                            temp = 0.8, top_k = 50L, top_p = 0.9, seed = 42L,
+                            min_p = 0.0, typical_p = 1.0,
+                            repeat_penalty = 1.0, repeat_last_n = 64L,
+                            frequency_penalty = 0.0, presence_penalty = 0.0,
+                            mirostat = 0L, mirostat_tau = 5.0, mirostat_eta = 0.1,
+                            grammar = NULL) {
+    stopifnot(is.character(prompt), length(prompt) == 1)
+    .Call("r_llama_gen_begin", ctx, prompt,
+          as.integer(max_new_tokens), as.double(temp),
+          as.integer(top_k), as.double(top_p), as.integer(seed),
+          as.double(min_p), as.double(typical_p),
+          as.double(repeat_penalty), as.integer(repeat_last_n),
+          as.double(frequency_penalty), as.double(presence_penalty),
+          as.integer(mirostat), as.double(mirostat_tau), as.double(mirostat_eta),
+          grammar)
+}
+
+#' Pull the next chunk of a streaming generation
+#'
+#' Advances a generation started with [llama_gen_begin] by one token and
+#' returns the next chunk of decoded text. A possibly-incomplete trailing
+#' UTF-8 character is held back until enough bytes arrive, so every returned
+#' chunk is valid UTF-8 (the chunk may be \code{""} when the only new byte is
+#' part of an unfinished character).
+#'
+#' @param state Generation state handle from [llama_gen_begin].
+#' @return A length-1 UTF-8 character vector with the next chunk, or
+#'   \code{NULL} when generation has finished (end-of-generation token reached
+#'   or \code{max_new_tokens} exhausted). After \code{NULL}, call
+#'   [llama_gen_end] to flush any remaining bytes.
+#' @seealso [llama_gen_begin], [llama_gen_end]
+#' @export
+llama_gen_next <- function(state) {
+    .Call("r_llama_gen_next", state)
+}
+
+#' Finish a streaming generation
+#'
+#' Marks the generation done and returns any bytes still held in the internal
+#' UTF-8 carry buffer (the tail of an unfinished character, if generation
+#' stopped mid-character). Concatenating every [llama_gen_next] chunk followed
+#' by the \code{llama_gen_end} result reproduces the full [llama_generate]
+#' output for the same seed and parameters. Safe to call more than once.
+#'
+#' @param state Generation state handle from [llama_gen_begin].
+#' @return A length-1 UTF-8 character vector with any remaining buffered text
+#'   (often \code{""}).
+#' @seealso [llama_gen_begin], [llama_gen_next]
+#' @export
+llama_gen_end <- function(state) {
+    .Call("r_llama_gen_end", state)
 }
 
 #' Generate completions for multiple prompts in parallel
