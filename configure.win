@@ -32,7 +32,13 @@ fi
 VULKAN_LIBS=""
 if [ -n "$VULKAN_SDK" ] && [ -d "$VULKAN_SDK/Lib" ]; then
     echo "Vulkan: detected at $VULKAN_SDK (will link -lvulkan-1)"
-    VULKAN_LIBS="-L\"${VULKAN_SDK}/Lib\" -lvulkan-1"
+    # Normalize the SDK path: convert Windows backslashes to forward slashes.
+    # gcc/MinGW accept forward slashes, and this keeps the path safe for use in
+    # the right-hand side of the sed substitution below. Native backslashes
+    # (e.g. C:\VulkanSDK\1.4.350.0) would be misread by sed as backreferences
+    # (\1, \4, ...) -> "invalid reference \1 on 's' command's RHS".
+    VULKAN_SDK_FWD=$(printf '%s' "$VULKAN_SDK" | tr '\\' '/')
+    VULKAN_LIBS="-L\"${VULKAN_SDK_FWD}/Lib\" -lvulkan-1"
 else
     echo "Vulkan: not found (building without GPU support)"
 fi
