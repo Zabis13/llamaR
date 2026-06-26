@@ -2,6 +2,7 @@
 #include <string>
 #include <cstring>
 #include <chrono>
+#include <map>
 
 #include <R.h>
 #include <Rinternals.h>
@@ -13,6 +14,7 @@
 #endif
 
 #include "llama.h"
+#include "llama-ext.h"  // [llamaR] llama_get_memory_breakdown (master moved it here)
 #include <ggml-backend.h>
 #include <ggml-cpu.h>
 
@@ -398,6 +400,45 @@ extern "C" SEXP r_llama_detokenize(SEXP r_ctx, SEXP r_tokens) {
 // Generate: prompt → encode → decode loop → text
 // ============================================================
 
+// Add a grammar sampler to the chain. If trigger patterns/tokens are supplied
+// (from llama_chat_build for lazy formats like Mistral/Ministral), use the
+// lazy-patterns sampler so the grammar only constrains output after a trigger
+// (e.g. [TOOL_CALLS]); otherwise use the plain grammar sampler. r_trig_pat /
+// r_trig_tok may be NULL or empty for non-lazy grammars.
+static void llamar_add_grammar_sampler(llama_sampler * smpl,
+                                       const llama_vocab * vocab,
+                                       const char * grammar,
+                                       SEXP r_trig_pat, SEXP r_trig_tok) {
+    if (!grammar || strlen(grammar) == 0) return;
+
+    const int n_pat = Rf_isNull(r_trig_pat) ? 0 : (int) Rf_length(r_trig_pat);
+    const int n_tok = Rf_isNull(r_trig_tok) ? 0 : (int) Rf_length(r_trig_tok);
+
+    // Lazy-patterns sampler only when triggers are supplied (the grammar then
+    // waits for a trigger before constraining). The caller passes triggers only
+    // for lazy grammars; a non-lazy grammar must constrain from the first token
+    // and so falls through to the plain grammar sampler.
+    if (n_pat == 0 && n_tok == 0) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_grammar(vocab, grammar, "root"));
+        return;
+    }
+
+    std::vector<const char *> patterns;
+    patterns.reserve(n_pat);
+    for (int i = 0; i < n_pat; i++) {
+        patterns.push_back(CHAR(STRING_ELT(r_trig_pat, i)));
+    }
+    std::vector<llama_token> tokens;
+    tokens.reserve(n_tok);
+    for (int i = 0; i < n_tok; i++) {
+        tokens.push_back((llama_token) INTEGER(r_trig_tok)[i]);
+    }
+    llama_sampler_chain_add(smpl, llama_sampler_init_grammar_lazy_patterns(
+        vocab, grammar, "root",
+        patterns.data(), patterns.size(),
+        tokens.data(), tokens.size()));
+}
+
 extern "C" SEXP r_llama_generate(SEXP r_ctx, SEXP r_prompt,
                                   SEXP r_max_new_tokens, SEXP r_temp,
                                   SEXP r_top_k, SEXP r_top_p, SEXP r_seed,
@@ -406,7 +447,8 @@ extern "C" SEXP r_llama_generate(SEXP r_ctx, SEXP r_prompt,
                                   SEXP r_frequency_penalty, SEXP r_presence_penalty,
                                   SEXP r_mirostat, SEXP r_mirostat_tau,
                                   SEXP r_mirostat_eta, SEXP r_grammar,
-                                  SEXP r_with_timings) {
+                                  SEXP r_with_timings,
+                                  SEXP r_trigger_patterns, SEXP r_trigger_tokens) {
     llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
     if (!ctx) Rf_error("llamaR: invalid context pointer");
 
@@ -471,10 +513,9 @@ extern "C" SEXP r_llama_generate(SEXP r_ctx, SEXP r_prompt,
     auto sparams = llama_sampler_chain_default_params();
     llama_sampler * smpl = llama_sampler_chain_init(sparams);
 
-    // Grammar (must be added first to constrain logits before other samplers)
-    if (grammar && strlen(grammar) > 0) {
-        llama_sampler_chain_add(smpl, llama_sampler_init_grammar(vocab, grammar, "root"));
-    }
+    // Grammar (must be added first to constrain logits before other samplers).
+    // Uses lazy-patterns when triggers are supplied (chat_build lazy formats).
+    llamar_add_grammar_sampler(smpl, vocab, grammar, r_trigger_patterns, r_trigger_tokens);
 
     // Penalties (applied before sampling)
     if (repeat_penalty != 1.0f || freq_penalty != 0.0f || pres_penalty != 0.0f) {
@@ -575,7 +616,12 @@ extern "C" SEXP r_llama_generate(SEXP r_ctx, SEXP r_prompt,
         }
 
         generated.push_back(current_token);
-        llama_sampler_accept(smpl, current_token);
+        // NOTE: llama_sampler_sample() already calls llama_sampler_accept()
+        // internally, so we must NOT accept again here. A double-accept is
+        // harmless for stateless samplers (penalties) but corrupts the grammar
+        // sampler: it advances the grammar stack twice per token, so the second
+        // advance has no valid transition and aborts with "Unexpected empty
+        // grammar stack". This broke all grammar-constrained generation.
 
         if (with_timings) {
             t_sample_ms += std::chrono::duration<double, std::milli>(clk::now() - t_s0).count();
@@ -736,7 +782,8 @@ extern "C" SEXP r_llama_gen_begin(SEXP r_ctx, SEXP r_prompt,
                                   SEXP r_repeat_penalty, SEXP r_repeat_last_n,
                                   SEXP r_frequency_penalty, SEXP r_presence_penalty,
                                   SEXP r_mirostat, SEXP r_mirostat_tau,
-                                  SEXP r_mirostat_eta, SEXP r_grammar) {
+                                  SEXP r_mirostat_eta, SEXP r_grammar,
+                                  SEXP r_trigger_patterns, SEXP r_trigger_tokens) {
     llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
     if (!ctx) Rf_error("llamaR: invalid context pointer");
 
@@ -779,9 +826,8 @@ extern "C" SEXP r_llama_gen_begin(SEXP r_ctx, SEXP r_prompt,
     auto sparams = llama_sampler_chain_default_params();
     llama_sampler * smpl = llama_sampler_chain_init(sparams);
 
-    if (grammar && strlen(grammar) > 0) {
-        llama_sampler_chain_add(smpl, llama_sampler_init_grammar(vocab, grammar, "root"));
-    }
+    llamar_add_grammar_sampler(smpl, vocab, grammar, r_trigger_patterns, r_trigger_tokens);
+
     if (repeat_penalty != 1.0f || freq_penalty != 0.0f || pres_penalty != 0.0f) {
         llama_sampler_chain_add(smpl,
             llama_sampler_init_penalties(repeat_last_n, repeat_penalty, freq_penalty, pres_penalty));
@@ -852,7 +898,9 @@ extern "C" SEXP r_llama_gen_next(SEXP r_state) {
         return R_NilValue;
     }
 
-    llama_sampler_accept(st->smpl, tok);
+    // NOTE: no llama_sampler_accept() here — llama_sampler_sample() already
+    // accepted this token. A second accept double-advances the grammar sampler
+    // and aborts with "Unexpected empty grammar stack" (see llama_generate).
     st->n_remaining--;
 
     // detokenize this single token, appending to the UTF-8 carry buffer
@@ -1065,7 +1113,8 @@ extern "C" SEXP r_llama_generate_batch(SEXP r_ctx, SEXP r_prompts,
             continue;
         }
         generated[s].push_back(tok);
-        llama_sampler_accept(smpls[s], tok);
+        // llama_sampler_sample() already accepted tok; no second accept (see
+        // the grammar double-advance note in llama_generate).
         n_generated[s] = 1;
     }
 
@@ -1124,7 +1173,8 @@ extern "C" SEXP r_llama_generate_batch(SEXP r_ctx, SEXP r_prompts,
             }
 
             generated[s].push_back(tok);
-            llama_sampler_accept(smpls[s], tok);
+            // llama_sampler_sample() already accepted tok; no second accept
+            // (see the grammar double-advance note in llama_generate).
             n_generated[s]++;
 
             if (n_generated[s] >= max_new_tokens) {
@@ -1525,6 +1575,30 @@ extern "C" SEXP r_llama_lora_load(SEXP r_model, SEXP r_path) {
     return result;
 }
 
+// [llamaR] master replaced the per-adapter set/rm/clear API with a single
+// llama_set_adapters_lora(ctx, adapters**, n, scales*) that overwrites the whole
+// active set. To keep our documented per-adapter contract (apply many, remove a
+// specific one keeping others, clear all) we track the active adapter->scale set
+// per context here and rebuild the array on every change.
+static std::map<llama_context *, std::map<llama_adapter_lora *, float>> g_lora_active;
+
+static void llamar_lora_sync(llama_context * ctx) {
+    auto & active = g_lora_active[ctx];
+    if (active.empty()) {
+        llama_set_adapters_lora(ctx, nullptr, 0, nullptr);
+        return;
+    }
+    std::vector<llama_adapter_lora *> adapters;
+    std::vector<float> scales;
+    adapters.reserve(active.size());
+    scales.reserve(active.size());
+    for (auto & kv : active) {
+        adapters.push_back(kv.first);
+        scales.push_back(kv.second);
+    }
+    llama_set_adapters_lora(ctx, adapters.data(), adapters.size(), scales.data());
+}
+
 extern "C" SEXP r_llama_lora_apply(SEXP r_ctx, SEXP r_adapter, SEXP r_scale) {
     llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
     if (!ctx) Rf_error("llamaR: invalid context pointer");
@@ -1534,10 +1608,8 @@ extern "C" SEXP r_llama_lora_apply(SEXP r_ctx, SEXP r_adapter, SEXP r_scale) {
 
     float scale = (float) REAL(r_scale)[0];
 
-    int ret = llama_set_adapter_lora(ctx, adapter, scale);
-    if (ret != 0) {
-        Rf_error("llamaR: failed to apply LoRA adapter (error %d)", ret);
-    }
+    g_lora_active[ctx][adapter] = scale;
+    llamar_lora_sync(ctx);
 
     return R_NilValue;
 }
@@ -1549,15 +1621,22 @@ extern "C" SEXP r_llama_lora_remove(SEXP r_ctx, SEXP r_adapter) {
     llama_adapter_lora * adapter = (llama_adapter_lora *) R_ExternalPtrAddr(r_adapter);
     if (!adapter) Rf_error("llamaR: invalid LoRA adapter pointer");
 
-    int ret = llama_rm_adapter_lora(ctx, adapter);
-    return Rf_ScalarInteger(ret);
+    auto & active = g_lora_active[ctx];
+    auto it = active.find(adapter);
+    if (it == active.end()) {
+        return Rf_ScalarInteger(-1);  // adapter was not applied
+    }
+    active.erase(it);
+    llamar_lora_sync(ctx);
+    return Rf_ScalarInteger(0);
 }
 
 extern "C" SEXP r_llama_lora_clear(SEXP r_ctx) {
     llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
     if (!ctx) Rf_error("llamaR: invalid context pointer");
 
-    llama_clear_adapter_lora(ctx);
+    g_lora_active.erase(ctx);
+    llama_set_adapters_lora(ctx, nullptr, 0, nullptr);
     return R_NilValue;
 }
 
@@ -2092,7 +2171,28 @@ extern "C" SEXP r_llama_perf_context_print(SEXP r_ctx) {
 extern "C" SEXP r_llama_memory_breakdown_print(SEXP r_ctx) {
     llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
     if (!ctx) Rf_error("llamaR: invalid context pointer");
-    llama_memory_breakdown_print(ctx);
+    // [llamaR] upstream master removed llama_memory_breakdown_print(); it now
+    // exposes llama_get_memory_breakdown() returning a per-buffer-type map, and
+    // leaves printing to the caller. We aggregate and print via Rprintf.
+    const llama_memory_breakdown bd = llama_get_memory_breakdown(ctx);
+    size_t tot_model = 0, tot_ctx = 0, tot_compute = 0;
+    for (const auto & kv : bd) {
+        const ggml_backend_buffer_type_t buft = kv.first;
+        const llama_memory_breakdown_data & d = kv.second;
+        Rprintf("%-20s: model %8.2f MiB, context %8.2f MiB, compute %8.2f MiB\n",
+                ggml_backend_buft_name(buft),
+                d.model   / (1024.0 * 1024.0),
+                d.context / (1024.0 * 1024.0),
+                d.compute / (1024.0 * 1024.0));
+        tot_model   += d.model;
+        tot_ctx     += d.context;
+        tot_compute += d.compute;
+    }
+    Rprintf("%-20s: model %8.2f MiB, context %8.2f MiB, compute %8.2f MiB\n",
+            "total",
+            tot_model   / (1024.0 * 1024.0),
+            tot_ctx     / (1024.0 * 1024.0),
+            tot_compute / (1024.0 * 1024.0));
     return R_NilValue;
 }
 
@@ -2224,6 +2324,20 @@ extern "C" SEXP r_llama_token_to_piece(SEXP r_ctx, SEXP r_token, SEXP r_special)
 // Registration
 // ============================================================
 
+// Defined in r_chat_interface.cpp (kept separate so the heavy C++ chat/template
+// headers don't pull into this translation unit).
+extern "C" SEXP r_llama_chat_build(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern "C" SEXP r_llama_chat_parse(SEXP, SEXP, SEXP, SEXP);
+
+// Multimodal entry points (defined in r_mtmd_interface.cpp)
+extern "C" SEXP r_mtmd_init(SEXP, SEXP, SEXP, SEXP);
+extern "C" SEXP r_mtmd_support_vision(SEXP);
+extern "C" SEXP r_mtmd_support_audio(SEXP);
+extern "C" SEXP r_mtmd_marker(void);
+extern "C" SEXP r_mtmd_set_verbosity(SEXP);
+extern "C" SEXP r_mtmd_bitmap_from_file(SEXP, SEXP);
+extern "C" SEXP r_mtmd_eval(SEXP, SEXP, SEXP, SEXP, SEXP);
+
 static const R_CallMethodDef CallEntries[] = {
     // Version & hardware
     {"r_llama_version",               (DL_FUNC) &r_llama_version,               0},
@@ -2282,8 +2396,8 @@ static const R_CallMethodDef CallEntries[] = {
     // Encode
     {"r_llama_encode",                (DL_FUNC) &r_llama_encode,                2},
     // Generate
-    {"r_llama_generate",              (DL_FUNC) &r_llama_generate,              18},
-    {"r_llama_gen_begin",             (DL_FUNC) &r_llama_gen_begin,             17},
+    {"r_llama_generate",              (DL_FUNC) &r_llama_generate,              20},
+    {"r_llama_gen_begin",             (DL_FUNC) &r_llama_gen_begin,             19},
     {"r_llama_gen_next",              (DL_FUNC) &r_llama_gen_next,              1},
     {"r_llama_gen_end",               (DL_FUNC) &r_llama_gen_end,               1},
     {"r_llama_generate_batch",        (DL_FUNC) &r_llama_generate_batch,        14},
@@ -2313,6 +2427,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"r_llama_chat_template",         (DL_FUNC) &r_llama_chat_template,         2},
     {"r_llama_chat_apply_template",   (DL_FUNC) &r_llama_chat_apply_template,   3},
     {"r_llama_chat_builtin_templates",(DL_FUNC) &r_llama_chat_builtin_templates,0},
+    // Tool-aware chat templates + parsing (r_chat_interface.cpp)
+    {"r_llama_chat_build",            (DL_FUNC) &r_llama_chat_build,            7},
+    {"r_llama_chat_parse",            (DL_FUNC) &r_llama_chat_parse,            4},
     // LoRA
     {"r_llama_lora_load",             (DL_FUNC) &r_llama_lora_load,             2},
     {"r_llama_lora_apply",            (DL_FUNC) &r_llama_lora_apply,            3},
@@ -2325,6 +2442,14 @@ static const R_CallMethodDef CallEntries[] = {
     {"r_llama_memory_breakdown_print",(DL_FUNC) &r_llama_memory_breakdown_print,1},
     // Hardware
     {"r_llama_supports_rpc",          (DL_FUNC) &r_llama_supports_rpc,          0},
+    // Multimodal (mtmd / clip) — defined in r_mtmd_interface.cpp
+    {"r_mtmd_init",                   (DL_FUNC) &r_mtmd_init,                   4},
+    {"r_mtmd_support_vision",         (DL_FUNC) &r_mtmd_support_vision,         1},
+    {"r_mtmd_support_audio",          (DL_FUNC) &r_mtmd_support_audio,          1},
+    {"r_mtmd_marker",                 (DL_FUNC) &r_mtmd_marker,                 0},
+    {"r_mtmd_set_verbosity",          (DL_FUNC) &r_mtmd_set_verbosity,          1},
+    {"r_mtmd_bitmap_from_file",       (DL_FUNC) &r_mtmd_bitmap_from_file,       2},
+    {"r_mtmd_eval",                   (DL_FUNC) &r_mtmd_eval,                   5},
     {NULL, NULL, 0}
 };
 

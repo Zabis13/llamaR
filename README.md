@@ -11,7 +11,9 @@ The package supports GPU acceleration via Vulkan, and automatically falls back t
 - Tokenization, detokenization and text generation (`llama_tokenize`, `llama_detokenize`, `llama_generate`)
 - Streaming (token-by-token) generation (`llama_gen_begin`, `llama_gen_next`, `llama_gen_end`)
 - OpenAI-compatible HTTP server for local models (`llama_serve_openai`) — connect OpenCode, ellmer, the `openai` SDK, etc.
+- Anthropic Messages API server (`llama_serve_anthropic`) with tool use — run Claude Code against a local model via `ANTHROPIC_BASE_URL`.
 - ellmer `Chat` objects backed by local models (`chat_llamar`) — use the ellmer/ragnar toolchain against local inference
+- Multimodal (vision) inference (`llama_mtmd_load`, `llama_image_load`, `llama_image_eval`) — vision/OCR models via an mmproj projector
 - Embedding extraction: single (`llama_embeddings`), batch (`llama_embed_batch`), ragnar-compatible (`embed_llamar`)
 - Hugging Face integration: download and cache models (`llama_hf_download`, `llama_load_model_hf`, etc.)
 - Encoder-decoder model support (T5, BART) via `llama_encode`
@@ -255,6 +257,43 @@ To connect [OpenCode](https://opencode.ai), add an OpenAI-compatible provider in
 `http://127.0.0.1:11434/v1`, with the model id matching what `/v1/models`
 reports.
 
+### Serving an Anthropic API for Claude Code
+
+`llama_serve_anthropic()` exposes an Anthropic Messages API-compatible endpoint
+(`POST /v1/messages`, blocking and streaming, with tool use), so
+[Claude Code](https://claude.com/claude-code) can run against a local model.
+Also requires the optional `drogonR` package.
+
+```r
+# Blocks, serving POST /v1/messages and GET /v1/models. Default port 11435.
+# Use a tool-calling-capable model (Qwen, Llama-3.x, Mistral/Mixtral, …).
+llama_serve_anthropic("Qwen3.5-9B-UD-Q6_K_XL.gguf", port = 11435L)
+```
+
+For hybrid *thinking* models (Qwen3.5, etc.) the server keeps `enable_thinking =
+FALSE` by default: otherwise the model can spend its whole token budget inside a
+`<think>` block and never reach the answer, leaving Claude Code with an empty
+reply. Set `enable_thinking = TRUE` (and raise `max_tokens`) if you want the
+reasoning trace.
+
+Then point Claude Code at it with environment variables and launch as usual:
+
+```bash
+ANTHROPIC_BASE_URL=http://127.0.0.1:11435 \
+ANTHROPIC_API_KEY=sk-local \
+claude
+```
+
+`ANTHROPIC_API_KEY` only needs to be non-empty (the server does not check it).
+Tool calling works: tools sent by Claude Code are passed through the chat
+template, generation is grammar-constrained, and the model's output is parsed
+back into `tool_use` blocks. A curl smoke-test (non-stream, tool, and SSE) lives
+at `inst/examples/serve_anthropic_test.sh`:
+
+```bash
+bash inst/examples/serve_anthropic_test.sh model.gguf 11435
+```
+
 ### Chatting via ellmer
 
 `chat_llamar()` returns an [ellmer](https://ellmer.tidyverse.org/) `Chat`
@@ -373,15 +412,17 @@ llama_set_verbosity(3)  # Debug mode
 
 ## Supported Models
 
-Supports all llama.cpp compatible architectures (100+), including:
+Supports all llama.cpp compatible architectures (128, upstream `master`),
+including:
 
 - LLaMA 1/2/3
 - Mistral / Mixtral
-- Qwen / Qwen2
-- Gemma / Gemma 2
-- Phi-2 / Phi-3
+- Qwen / Qwen2 / Qwen3 / **Qwen3.5** (`qwen35` / `qwen35moe`)
+- Gemma / Gemma 2 / Gemma 3
+- Phi-2 / Phi-3 / Phi-4
 - DeepSeek
 - Command-R
+- Vision/OCR models (via the `mtmd` projector)
 - and many more
 
 Models must be in GGUF format. Convert models using llama.cpp tools.

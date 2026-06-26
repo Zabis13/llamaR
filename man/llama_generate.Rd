@@ -22,7 +22,9 @@ llama_generate(
   mirostat_tau = 5,
   mirostat_eta = 0.1,
   grammar = NULL,
-  with_timings = FALSE
+  with_timings = FALSE,
+  trigger_patterns = NULL,
+  trigger_tokens = NULL
 )
 }
 \arguments{

@@ -1,0 +1,18 @@
+@echo off
+REM Cleanup script for llamaR package (Windows)
+REM Removes compiled objects, shared libraries, and generated files.
+REM llamaR statically links libggml.a from ggmlR, so stale .o files left in
+REM any src subdirectory would relink against the OLD libggml.a. Recurse the
+REM whole src tree (/R) so a fixed directory list never goes stale.
+for /R src %%f in (*.o *.so *.dll *.dylib *.a) do @del /Q "%%f" 2>NUL
+
+REM Remove generated Makevars (created by configure)
+del /Q src\Makevars 2>NUL
+del /Q src\Makevars.win 2>NUL
+
+REM Remove build artifacts
+del /Q src\symbols.rds 2>NUL
+
+REM Remove R CMD check directories
+rmdir /S /Q ..Rcheck 2>NUL
+rmdir /S /Q llamaR.Rcheck 2>NUL

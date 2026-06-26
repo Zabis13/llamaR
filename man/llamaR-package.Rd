@@ -6,7 +6,7 @@
 \alias{llamaR-package}
 \title{llamaR: Interface for Large Language Models via 'llama.cpp'}
 \description{
-Provides 'R' bindings to 'llama.cpp' for running Large Language Models ('LLMs') locally with optional 'Vulkan' GPU acceleration via 'ggmlR'. Supports model loading, text generation, 'tokenization', token-to-piece conversion, 'embeddings' (single and batch), encoder-decoder inference, low-level batch management, chat templates, 'LoRA' adapters, explicit backend/device selection, multi-GPU split, and 'NUMA' optimization. Includes a high-level 'ragnar'-compatible embedding provider ('embed_llamar'). Built on top of 'ggmlR' for efficient tensor operations.
+Provides 'R' bindings to 'llama.cpp' for running Large Language Models ('LLMs') locally with optional 'Vulkan' GPU acceleration via 'ggmlR'. Supports model loading, text generation, 'tokenization', token-to-piece conversion, 'embeddings' (single and batch), encoder-decoder inference, low-level batch management, chat templates, tool calling with grammar-constrained output, 'LoRA' adapters, explicit backend/device selection, multi-GPU split, and 'NUMA' optimization. Includes a high-level 'ragnar'-compatible embedding provider ('embed_llamar'), an 'OpenAI'-compatible HTTP server, and an 'Anthropic' Messages API server for running 'Claude Code' against a local model. Built on top of 'ggmlR' for efficient tensor operations.
 }
 \seealso{
 Useful links:

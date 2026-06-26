@@ -4,7 +4,9 @@ CXX_STD = CXX17
 GGMLR_INCLUDE = $(shell "$(R_HOME)/bin/Rscript" -e "cat(system.file('include', package='ggmlR'))")
 GGMLR_LIB = $(shell "$(R_HOME)/bin/Rscript" -e "cat(system.file('lib', package='ggmlR'))")
 
-# Include paths
+# Include paths. All vendored headers are included with directory prefixes
+# ("jinja/...", "nlohmann/...") so a single -I. resolves them; we deliberately
+# avoid -Ijinja, which would shadow libc's <string.h> with jinja/string.h.
 PKG_CPPFLAGS = -I. -I$(GGMLR_INCLUDE) -DGGML_USE_CPU
 
 # Compiler flags
@@ -42,12 +44,44 @@ SOURCES_CPP = \
   llama-vocab.cpp \
   unicode.cpp \
   unicode-data.cpp \
-  r_llama_interface.cpp
+  r_llama_interface.cpp \
+  r_chat_interface.cpp \
+  r_mtmd_interface.cpp
+
+# Vendored common/ chat + template layer (tool-aware chat templates and
+# tool-call parsing — the common_chat_templates_apply / common_chat_parse
+# closure from llama.cpp's common/). common_chat_support.cpp is a trimmed
+# slice of common.cpp (string helpers + common_token_to_piece only).
+CHAT_CPP = \
+  chat.cpp \
+  chat-parser.cpp \
+  chat-parser-xml-toolcall.cpp \
+  chat-peg-parser.cpp \
+  peg-parser.cpp \
+  common-unicode.cpp \
+  json-partial.cpp \
+  json-schema-to-grammar.cpp \
+  regex-partial.cpp \
+  log.cpp \
+  build-info.cpp \
+  common_chat_support.cpp
+
+# Jinja template engine (vendored from common/jinja/)
+JINJA_CPP = $(wildcard jinja/*.cpp)
 
 # Model implementations
 MODELS_CPP = $(wildcard models/*.cpp)
 
-OBJECTS = $(SOURCES_CPP:.cpp=.o) $(MODELS_CPP:.cpp=.o)
+# Multimodal (vision/audio) subsystem — vendored from llama.cpp master tools/mtmd/.
+# clip ViT/projector engine + mtmd dispatcher + per-encoder graphs (mtmd/models/).
+# Mirrors the upstream layout so include paths inside these files need no edits;
+# GCC resolves "..." includes relative to each file's own directory. Header-only
+# vendored deps live in mtmd/stb/ and mtmd/miniaudio/. mtmd-debug.cpp (a CLI
+# utility pulling common/arg/log) is intentionally NOT compiled — the
+# mtmd_debug_* symbols it declares are defined inside mtmd.cpp.
+MTMD_CPP = $(wildcard mtmd/*.cpp mtmd/models/*.cpp)
+
+OBJECTS = $(SOURCES_CPP:.cpp=.o) $(CHAT_CPP:.cpp=.o) $(JINJA_CPP:.cpp=.o) $(MODELS_CPP:.cpp=.o) $(MTMD_CPP:.cpp=.o)
 
 # Force include R compatibility header for files using stderr/stdout
 # This redirects fprintf(stderr,...) to REprintf(...) for CRAN compliance
@@ -55,3 +89,17 @@ llama-grammar.o: PKG_CPPFLAGS += -include r_llama_compat.h
 llama-impl.o: PKG_CPPFLAGS += -include r_llama_compat.h
 llama-quant.o: PKG_CPPFLAGS += -include r_llama_compat.h
 unicode.o: PKG_CPPFLAGS += -include r_llama_compat.h
+json-partial.o: PKG_CPPFLAGS += -include r_llama_compat.h
+json-schema-to-grammar.o: PKG_CPPFLAGS += -include r_llama_compat.h
+
+# mtmd objects need -Imtmd so cross-includes like debug/mtmd-debug.h -> "mtmd.h"
+# resolve (upstream builds tools/mtmd with -Itools/mtmd). -Ivendor mirrors how
+# upstream resolves the vendored single-headers ("stb/stb_image.h",
+# "miniaudio/miniaudio.h") from src/vendor/ (= upstream's vendor/). Scoped to
+# mtmd objects only; the core engine does not include any mtmd/clip headers, so
+# this cannot shadow core headers. NB: we deliberately do NOT add -Imtmd/models
+# globally — that would let our src/models/*.cpp pick up mtmd/models/models.h.
+$(MTMD_CPP:.cpp=.o): PKG_CPPFLAGS += -Imtmd -Ivendor
+
+# The R<->mtmd bridge includes mtmd.h / mtmd-helper.h from src/mtmd/.
+r_mtmd_interface.o: PKG_CPPFLAGS += -Imtmd

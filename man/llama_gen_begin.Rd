@@ -21,7 +21,9 @@ llama_gen_begin(
   mirostat = 0L,
   mirostat_tau = 5,
   mirostat_eta = 0.1,
-  grammar = NULL
+  grammar = NULL,
+  trigger_patterns = NULL,
+  trigger_tokens = NULL
 )
 }
 \arguments{

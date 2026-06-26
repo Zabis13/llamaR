@@ -444,7 +444,8 @@ llama_generate <- function(ctx, prompt, max_new_tokens = 256L,
                            repeat_penalty = 1.0, repeat_last_n = 64L,
                            frequency_penalty = 0.0, presence_penalty = 0.0,
                            mirostat = 0L, mirostat_tau = 5.0, mirostat_eta = 0.1,
-                           grammar = NULL, with_timings = FALSE) {
+                           grammar = NULL, with_timings = FALSE,
+                           trigger_patterns = NULL, trigger_tokens = NULL) {
     stopifnot(is.character(prompt), length(prompt) == 1)
     .Call("r_llama_generate", ctx, prompt,
           as.integer(max_new_tokens), as.double(temp),
@@ -453,7 +454,9 @@ llama_generate <- function(ctx, prompt, max_new_tokens = 256L,
           as.double(repeat_penalty), as.integer(repeat_last_n),
           as.double(frequency_penalty), as.double(presence_penalty),
           as.integer(mirostat), as.double(mirostat_tau), as.double(mirostat_eta),
-          grammar, as.logical(with_timings))
+          grammar, as.logical(with_timings),
+          if (is.null(trigger_patterns)) NULL else as.character(trigger_patterns),
+          if (is.null(trigger_tokens)) NULL else as.integer(trigger_tokens))
 }
 
 #' Begin a streaming (token-by-token) generation
@@ -490,7 +493,8 @@ llama_gen_begin <- function(ctx, prompt, max_new_tokens = 256L,
                             repeat_penalty = 1.0, repeat_last_n = 64L,
                             frequency_penalty = 0.0, presence_penalty = 0.0,
                             mirostat = 0L, mirostat_tau = 5.0, mirostat_eta = 0.1,
-                            grammar = NULL) {
+                            grammar = NULL,
+                            trigger_patterns = NULL, trigger_tokens = NULL) {
     stopifnot(is.character(prompt), length(prompt) == 1)
     .Call("r_llama_gen_begin", ctx, prompt,
           as.integer(max_new_tokens), as.double(temp),
@@ -499,7 +503,9 @@ llama_gen_begin <- function(ctx, prompt, max_new_tokens = 256L,
           as.double(repeat_penalty), as.integer(repeat_last_n),
           as.double(frequency_penalty), as.double(presence_penalty),
           as.integer(mirostat), as.double(mirostat_tau), as.double(mirostat_eta),
-          grammar)
+          grammar,
+          if (is.null(trigger_patterns)) NULL else as.character(trigger_patterns),
+          if (is.null(trigger_tokens)) NULL else as.integer(trigger_tokens))
 }
 
 #' Pull the next chunk of a streaming generation
@@ -784,6 +790,97 @@ llama_chat_template <- function(model, name = NULL) {
 llama_chat_apply_template <- function(messages, template = NULL, add_generation_prompt = TRUE) {
     stopifnot(is.list(messages))
     .Call("r_llama_chat_apply_template", template, messages, as.logical(add_generation_prompt))
+}
+
+#' Build a tool-aware chat prompt and its parsing grammar
+#'
+#' Applies the model's built-in chat template (via llama.cpp's Jinja path,
+#' i.e. \code{common_chat_templates_apply}) to a conversation that may include
+#' tool definitions, returning both the formatted \code{prompt} and the
+#' \code{grammar} that constrains the model to emit tool calls in the format
+#' that template expects. Unlike \code{\link{llama_chat_apply_template}} (which
+#' uses the low-level template path and is text-only), this understands
+#' \code{tools} and is what \code{\link{llama_serve_anthropic}} uses to support
+#' tool calling.
+#'
+#' Pair the returned \code{format} with \code{\link{llama_chat_parse}} to turn
+#' the model's raw output back into content and structured tool calls.
+#'
+#' @param model A model handle from \code{\link{llama_load_model}}.
+#' @param messages List of messages in OpenAI chat shape: each a list with
+#'   \code{role} and \code{content} (content may be a string or a list of
+#'   content parts). Assistant tool calls and tool results are supported via
+#'   the usual \code{tool_calls} / \code{tool_call_id} fields.
+#' @param tools Optional list of tool definitions in OpenAI shape (each a list
+#'   with \code{type = "function"} and a \code{function} entry holding
+#'   \code{name}, \code{description}, \code{parameters}). \code{NULL} for a
+#'   plain chat prompt.
+#' @param tool_choice One of \code{"auto"}, \code{"required"}, \code{"none"},
+#'   or \code{NULL} to leave it at the template default.
+#' @param json_schema Optional JSON-schema string to constrain free-form output
+#'   (structured output). Mutually meaningful with \code{tools = NULL}.
+#' @param add_generation_prompt Whether to append the assistant prompt prefix.
+#' @param enable_thinking Whether to allow reasoning blocks for models that
+#'   support them.
+#' @return A list with elements \code{prompt}, \code{grammar} (possibly empty),
+#'   \code{format} (integer format id for \code{\link{llama_chat_parse}}),
+#'   \code{grammar_lazy}, \code{additional_stops}, and \code{preserved_tokens}.
+#' @seealso [llama_chat_parse], [llama_serve_anthropic]
+#' @export
+llama_chat_build <- function(model, messages, tools = NULL, tool_choice = NULL,
+                             json_schema = NULL, add_generation_prompt = TRUE,
+                             enable_thinking = TRUE) {
+    stopifnot(is.list(messages))
+    messages_json <- jsonlite::toJSON(messages, auto_unbox = TRUE, null = "null")
+    tools_json <- if (is.null(tools) || length(tools) == 0) NULL
+                  else jsonlite::toJSON(tools, auto_unbox = TRUE, null = "null")
+    .Call("r_llama_chat_build",
+          model,
+          as.character(messages_json),
+          if (is.null(tools_json)) NULL else as.character(tools_json),
+          if (is.null(tool_choice)) NULL else as.character(tool_choice),
+          if (is.null(json_schema)) NULL else as.character(json_schema),
+          as.logical(add_generation_prompt),
+          as.logical(enable_thinking))
+}
+
+#' Parse raw model output into content and tool calls
+#'
+#' Inverse of the formatting done by \code{\link{llama_chat_build}}: takes the
+#' model's raw generated text and the \code{format} id returned by
+#' \code{llama_chat_build()}, and extracts assistant \code{content}, any
+#' \code{reasoning_content}, and structured tool calls (name, arguments JSON,
+#' id) using llama.cpp's per-format parsers (\code{common_chat_parse}).
+#'
+#' @param input Raw generated text from the model.
+#' @param format Integer format id as returned in
+#'   \code{llama_chat_build()$format}.
+#' @param is_partial Set \code{TRUE} when \code{input} is an incomplete stream
+#'   prefix (enables partial/streaming-tolerant parsing).
+#' @param parser Serialized PEG parser arena as returned in
+#'   \code{llama_chat_build()$parser}. Required for PEG-based formats
+#'   (\code{PEG_SIMPLE}/\code{PEG_NATIVE}/\code{PEG_CONSTRUCTED}, e.g. Mistral /
+#'   Ministral); ignored otherwise. Pass \code{llama_chat_build()$parser}
+#'   straight through.
+#' @return A list with \code{content}, \code{reasoning_content}, and
+#'   \code{tool_calls} — the latter a data frame with columns \code{name},
+#'   \code{arguments} (a JSON string), and \code{id} (zero rows if none).
+#' @seealso [llama_chat_build]
+#' @export
+llama_chat_parse <- function(input, format, is_partial = FALSE, parser = NULL) {
+    res <- .Call("r_llama_chat_parse",
+                 as.character(input), as.integer(format), as.logical(is_partial),
+                 if (is.null(parser)) NULL else as.character(parser))
+    list(
+        content           = res$content,
+        reasoning_content = res$reasoning_content,
+        tool_calls = data.frame(
+            name      = res$tool_names,
+            arguments = res$tool_arguments,
+            id        = res$tool_ids,
+            stringsAsFactors = FALSE
+        )
+    )
 }
 
 # ============================================================

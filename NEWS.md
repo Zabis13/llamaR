@@ -1,3 +1,51 @@
+# llamaR 0.2.5
+
+## Engine upgrade (upstream llama.cpp master)
+
+* The bundled llama.cpp engine was migrated to the current upstream `master`
+  class-based architecture: per-architecture model classes (`llama_model_X`),
+  the refactored `create_tensor`/buffer-type loader, and the split-out `models/*`
+  graph builders. This brings 128 model architectures and unlocks the newest
+  ones while preserving llamaR's own patches (grammar/CRAN redirects, chat/tool
+  layer, delta-net).
+* New architecture support including **Qwen3.5** (`qwen35` / `qwen35moe`,
+  hybrid gated delta-net + attention) — loads and generates from R and over the
+  Anthropic/OpenAI servers.
+
+## Multimodal (vision)
+
+* New `mtmd` subsystem (vendored from upstream) for vision/OCR models:
+  `llama_mtmd_load()` loads a multimodal projector (mmproj GGUF),
+  `llama_image_load()` reads an image, and `llama_image_eval()` feeds
+  text + image chunks through the context for generation. Capability checks via
+  `llama_mtmd_support_vision()` / `llama_mtmd_support_audio()`.
+
+## Tool calling
+
+* `llama_chat_build()` — apply a model's chat template (Jinja path) to messages
+  plus tool definitions, returning the prompt, the grammar that constrains tool
+  calls, the format id, lazy-grammar triggers, and the serialized PEG parser
+  arena. Backed by the vendored llama.cpp `common/` chat layer.
+* `llama_chat_parse()` — parse raw model output back into content,
+  `reasoning_content`, and structured tool calls (name, arguments, id),
+  including PEG-based formats (Mistral/Qwen).
+* `llama_generate()` / `llama_gen_begin()` gain `trigger_patterns` /
+  `trigger_tokens` arguments and use `llama_sampler_init_grammar_lazy_patterns`
+  for lazy grammars (constrain only after a trigger such as `[TOOL_CALLS]`).
+
+## Anthropic Messages API server for Claude Code
+
+* `llama_serve_anthropic()` — serve a local GGUF model over an Anthropic
+  Messages API-compatible HTTP API (`POST /v1/messages`, `GET /v1/models`,
+  streaming and blocking, with tool use). Point Claude Code at it with
+  `ANTHROPIC_BASE_URL`. Requires the optional `drogonR` package.
+* New `enable_thinking` argument (default `FALSE`) toggles the chat template's
+  reasoning mode for hybrid thinking models (Qwen3.5, etc.). Disabled by default
+  so Claude Code gets direct answers and fast tool calls; set `TRUE` (and raise
+  `max_tokens`) to keep the reasoning trace.
+
+---
+
 # llamaR 0.2.4
 
 ## Streaming generation
