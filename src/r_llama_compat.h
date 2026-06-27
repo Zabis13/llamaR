@@ -33,6 +33,11 @@ static FILE *const r_llama_dummy_stream_ = (FILE*)(void*)(intptr_t)1;
 #define fputs(str, stream) \
     ((stream == r_llama_dummy_stream_) ? (REprintf("%s", str), 0) : fputs(str, stream))
 
+// Redirect printf -> Rprintf. R CMD check flags __printf_chk (from plain
+// printf) as non-portable; route it through the R console instead.
+#undef printf
+#define printf(...) Rprintf(__VA_ARGS__)
+
 // Override exit/_Exit to prevent process termination (CRAN requirement)
 static inline void r_llama_exit(int status) {
     Rf_error("llama: exit called with status %d", status);

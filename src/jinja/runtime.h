@@ -10,7 +10,8 @@
 #include <string>
 #include <vector>
 
-#define JJ_DEBUG(msg, ...)  do { if (g_jinja_debug) printf("%s:%-3d : " msg "\n", FILENAME, __LINE__, __VA_ARGS__); } while (0)
+// Debug logging disabled: R packages must not write to stdout (CRAN policy).
+#define JJ_DEBUG(msg, ...)  do { (void)0; } while (0)
 
 extern bool g_jinja_debug;
 
@@ -92,7 +93,7 @@ struct context {
     }
 
     void print_vars() const {
-        printf("Context Variables:\n%s\n", value_to_json(env, 2).c_str());
+        // No-op: R packages must not write to stdout (CRAN policy).
     }
 
 private:

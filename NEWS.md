@@ -1,10 +1,10 @@
 # llamaR 0.2.5
 
-* Engine migrated to upstream llama.cpp `master` (128 architectures, incl. **Qwen3.5**).
-* Vision/OCR via the new `mtmd` subsystem (`llama_mtmd_load()`, `llama_image_eval()`).
-* Tool calling: `llama_chat_build()` / `llama_chat_parse()` + lazy-grammar triggers.
-* `llama_serve_anthropic()` serves a local model to Claude Code (`ANTHROPIC_BASE_URL`).
-* `enable_thinking` toggles reasoning mode on hybrid thinking models (default `FALSE`).
+* Engine updated to upstream llama.cpp (expanded architecture support, including Qwen3.5).
+* Added multimodal (vision/OCR) support via the mtmd subsystem.
+* Added tool calling support with chat templates and structured output parsing.
+* Added Anthropic Messages API-compatible server (`llama_serve_anthropic`) for local models (Claude Code support).
+* Added `enable_thinking` argument to `llama_chat_build()` (and `llama_serve_anthropic()`) to toggle the reasoning mode of hybrid thinking models.
 
 ---
 

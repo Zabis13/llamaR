@@ -1128,23 +1128,17 @@ NLOHMANN_JSON_NAMESPACE_END
 #      if JSON_HEDLEY_HAS_WARNING("-Wc++1z-extensions")
 #        define JSON_HEDLEY_DIAGNOSTIC_DISABLE_CPP98_COMPAT_WRAP_(xpr) \
     JSON_HEDLEY_DIAGNOSTIC_PUSH \
-    _Pragma("clang diagnostic ignored \"-Wc++98-compat\"") \
-    _Pragma("clang diagnostic ignored \"-Wc++17-extensions\"") \
-    _Pragma("clang diagnostic ignored \"-Wc++1z-extensions\"") \
     xpr \
     JSON_HEDLEY_DIAGNOSTIC_POP
 #      else
 #        define JSON_HEDLEY_DIAGNOSTIC_DISABLE_CPP98_COMPAT_WRAP_(xpr) \
     JSON_HEDLEY_DIAGNOSTIC_PUSH \
-    _Pragma("clang diagnostic ignored \"-Wc++98-compat\"") \
-    _Pragma("clang diagnostic ignored \"-Wc++17-extensions\"") \
     xpr \
     JSON_HEDLEY_DIAGNOSTIC_POP
 #      endif
 #    else
 #      define JSON_HEDLEY_DIAGNOSTIC_DISABLE_CPP98_COMPAT_WRAP_(xpr) \
     JSON_HEDLEY_DIAGNOSTIC_PUSH \
-    _Pragma("clang diagnostic ignored \"-Wc++98-compat\"") \
     xpr \
     JSON_HEDLEY_DIAGNOSTIC_POP
 #    endif
@@ -1198,7 +1192,6 @@ NLOHMANN_JSON_NAMESPACE_END
 #  if JSON_HEDLEY_HAS_WARNING("-Wold-style-cast")
 #    define JSON_HEDLEY_CPP_CAST(T, expr) \
     JSON_HEDLEY_DIAGNOSTIC_PUSH \
-    _Pragma("clang diagnostic ignored \"-Wold-style-cast\"") \
     ((T) (expr)) \
     JSON_HEDLEY_DIAGNOSTIC_POP
 #  elif JSON_HEDLEY_IAR_VERSION_CHECK(8,3,0)
@@ -1217,19 +1210,19 @@ NLOHMANN_JSON_NAMESPACE_END
     #undef JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED
 #endif
 #if JSON_HEDLEY_HAS_WARNING("-Wdeprecated-declarations")
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED _Pragma("clang diagnostic ignored \"-Wdeprecated-declarations\"")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED
 #elif JSON_HEDLEY_INTEL_VERSION_CHECK(13,0,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED _Pragma("warning(disable:1478 1786)")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED
 #elif JSON_HEDLEY_INTEL_CL_VERSION_CHECK(2021,1,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED __pragma(warning(disable:1478 1786))
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED
 #elif JSON_HEDLEY_PGI_VERSION_CHECK(20,7,0)
     #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED _Pragma("diag_suppress 1215,1216,1444,1445")
 #elif JSON_HEDLEY_PGI_VERSION_CHECK(17,10,0)
     #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED _Pragma("diag_suppress 1215,1444")
 #elif JSON_HEDLEY_GCC_VERSION_CHECK(4,3,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED
 #elif JSON_HEDLEY_MSVC_VERSION_CHECK(15,0,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED __pragma(warning(disable:4996))
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED
 #elif JSON_HEDLEY_MCST_LCC_VERSION_CHECK(1,25,10)
     #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_DEPRECATED _Pragma("diag_suppress 1215,1444")
 #elif \
@@ -1261,17 +1254,17 @@ NLOHMANN_JSON_NAMESPACE_END
     #undef JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_PRAGMAS
 #endif
 #if JSON_HEDLEY_HAS_WARNING("-Wunknown-pragmas")
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_PRAGMAS _Pragma("clang diagnostic ignored \"-Wunknown-pragmas\"")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_PRAGMAS
 #elif JSON_HEDLEY_INTEL_VERSION_CHECK(13,0,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_PRAGMAS _Pragma("warning(disable:161)")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_PRAGMAS
 #elif JSON_HEDLEY_INTEL_CL_VERSION_CHECK(2021,1,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_PRAGMAS __pragma(warning(disable:161))
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_PRAGMAS
 #elif JSON_HEDLEY_PGI_VERSION_CHECK(17,10,0)
     #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_PRAGMAS _Pragma("diag_suppress 1675")
 #elif JSON_HEDLEY_GCC_VERSION_CHECK(4,3,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_PRAGMAS _Pragma("GCC diagnostic ignored \"-Wunknown-pragmas\"")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_PRAGMAS
 #elif JSON_HEDLEY_MSVC_VERSION_CHECK(15,0,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_PRAGMAS __pragma(warning(disable:4068))
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_PRAGMAS
 #elif \
     JSON_HEDLEY_TI_VERSION_CHECK(16,9,0) || \
     JSON_HEDLEY_TI_CL6X_VERSION_CHECK(8,0,0) || \
@@ -1292,15 +1285,15 @@ NLOHMANN_JSON_NAMESPACE_END
     #undef JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_CPP_ATTRIBUTES
 #endif
 #if JSON_HEDLEY_HAS_WARNING("-Wunknown-attributes")
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_CPP_ATTRIBUTES _Pragma("clang diagnostic ignored \"-Wunknown-attributes\"")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_CPP_ATTRIBUTES
 #elif JSON_HEDLEY_GCC_VERSION_CHECK(4,6,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_CPP_ATTRIBUTES _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_CPP_ATTRIBUTES
 #elif JSON_HEDLEY_INTEL_VERSION_CHECK(17,0,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_CPP_ATTRIBUTES _Pragma("warning(disable:1292)")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_CPP_ATTRIBUTES
 #elif JSON_HEDLEY_INTEL_CL_VERSION_CHECK(2021,1,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_CPP_ATTRIBUTES __pragma(warning(disable:1292))
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_CPP_ATTRIBUTES
 #elif JSON_HEDLEY_MSVC_VERSION_CHECK(19,0,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_CPP_ATTRIBUTES __pragma(warning(disable:5030))
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_CPP_ATTRIBUTES
 #elif JSON_HEDLEY_PGI_VERSION_CHECK(20,7,0)
     #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNKNOWN_CPP_ATTRIBUTES _Pragma("diag_suppress 1097,1098")
 #elif JSON_HEDLEY_PGI_VERSION_CHECK(17,10,0)
@@ -1324,11 +1317,11 @@ NLOHMANN_JSON_NAMESPACE_END
     #undef JSON_HEDLEY_DIAGNOSTIC_DISABLE_CAST_QUAL
 #endif
 #if JSON_HEDLEY_HAS_WARNING("-Wcast-qual")
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_CAST_QUAL _Pragma("clang diagnostic ignored \"-Wcast-qual\"")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_CAST_QUAL
 #elif JSON_HEDLEY_INTEL_VERSION_CHECK(13,0,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_CAST_QUAL _Pragma("warning(disable:2203 2331)")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_CAST_QUAL
 #elif JSON_HEDLEY_GCC_VERSION_CHECK(3,0,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_CAST_QUAL _Pragma("GCC diagnostic ignored \"-Wcast-qual\"")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_CAST_QUAL
 #else
     #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_CAST_QUAL
 #endif
@@ -1337,11 +1330,11 @@ NLOHMANN_JSON_NAMESPACE_END
     #undef JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNUSED_FUNCTION
 #endif
 #if JSON_HEDLEY_HAS_WARNING("-Wunused-function")
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNUSED_FUNCTION _Pragma("clang diagnostic ignored \"-Wunused-function\"")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNUSED_FUNCTION
 #elif JSON_HEDLEY_GCC_VERSION_CHECK(3,4,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNUSED_FUNCTION _Pragma("GCC diagnostic ignored \"-Wunused-function\"")
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNUSED_FUNCTION
 #elif JSON_HEDLEY_MSVC_VERSION_CHECK(1,0,0)
-    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNUSED_FUNCTION __pragma(warning(disable:4505))
+    #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNUSED_FUNCTION
 #elif JSON_HEDLEY_MCST_LCC_VERSION_CHECK(1,25,10)
     #define JSON_HEDLEY_DIAGNOSTIC_DISABLE_UNUSED_FUNCTION _Pragma("diag_suppress 3142")
 #else
@@ -1595,16 +1588,12 @@ NLOHMANN_JSON_NAMESPACE_END
 
 JSON_HEDLEY_DIAGNOSTIC_PUSH
 #if JSON_HEDLEY_HAS_WARNING("-Wpedantic")
-    #pragma clang diagnostic ignored "-Wpedantic"
 #endif
 #if JSON_HEDLEY_HAS_WARNING("-Wc++98-compat-pedantic") && defined(__cplusplus)
-    #pragma clang diagnostic ignored "-Wc++98-compat-pedantic"
 #endif
 #if JSON_HEDLEY_GCC_HAS_WARNING("-Wvariadic-macros",4,0,0)
     #if defined(__clang__)
-        #pragma clang diagnostic ignored "-Wvariadic-macros"
     #elif defined(JSON_HEDLEY_GCC_VERSION)
-        #pragma GCC diagnostic ignored "-Wvariadic-macros"
     #endif
 #endif
 #if defined(JSON_HEDLEY_NON_NULL)
@@ -2277,12 +2266,10 @@ JSON_HEDLEY_DIAGNOSTIC_POP
 #  if JSON_HEDLEY_HAS_WARNING("-Wgcc-compat")
 #    define JSON_HEDLEY_REQUIRE(expr) \
     JSON_HEDLEY_DIAGNOSTIC_PUSH \
-    _Pragma("clang diagnostic ignored \"-Wgcc-compat\"") \
     __attribute__((diagnose_if(!(expr), #expr, "error"))) \
     JSON_HEDLEY_DIAGNOSTIC_POP
 #    define JSON_HEDLEY_REQUIRE_MSG(expr,msg) \
     JSON_HEDLEY_DIAGNOSTIC_PUSH \
-    _Pragma("clang diagnostic ignored \"-Wgcc-compat\"") \
     __attribute__((diagnose_if(!(expr), msg, "error"))) \
     JSON_HEDLEY_DIAGNOSTIC_POP
 #  else
@@ -2309,7 +2296,6 @@ JSON_HEDLEY_DIAGNOSTIC_POP
 #if JSON_HEDLEY_INTEL_VERSION_CHECK(19,0,0)
 #  define JSON_HEDLEY_FLAGS_CAST(T, expr) (__extension__ ({ \
         JSON_HEDLEY_DIAGNOSTIC_PUSH \
-        _Pragma("warning(disable:188)") \
         ((T) (expr)); \
         JSON_HEDLEY_DIAGNOSTIC_POP \
     }))
@@ -2527,8 +2513,6 @@ JSON_HEDLEY_DIAGNOSTIC_POP
 // disable documentation warnings on clang
 #if defined(__clang__)
     #pragma clang diagnostic push
-    #pragma clang diagnostic ignored "-Wdocumentation"
-    #pragma clang diagnostic ignored "-Wdocumentation-unknown-command"
 #endif
 
 // allow disabling exceptions
@@ -4494,7 +4478,6 @@ NLOHMANN_JSON_NAMESPACE_END
 // for a discussion.
 #if defined(__clang__)
     #pragma clang diagnostic push
-    #pragma clang diagnostic ignored "-Wweak-vtables"
 #endif
 
 NLOHMANN_JSON_NAMESPACE_BEGIN
@@ -5641,7 +5624,6 @@ namespace std
 #if defined(__clang__)
     // Fix: https://github.com/nlohmann/json/issues/1401
     #pragma clang diagnostic push
-    #pragma clang diagnostic ignored "-Wmismatched-tags"
 #endif
 template<typename IteratorType>
 class tuple_size<::nlohmann::detail::iteration_proxy_value<IteratorType>> // NOLINT(cert-dcl58-cpp)
@@ -20790,7 +20772,6 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
         // been invalidated; see https://github.com/nlohmann/json/issues/2962
 #ifdef JSON_HEDLEY_MSVC_VERSION
 #pragma warning(push )
-#pragma warning(disable : 4127) // ignore warning to replace if with if constexpr
 #endif
         if (detail::is_ordered_map<object_t>::value)
         {
