@@ -28,6 +28,8 @@ LinkingTo: ggmlR
 SystemRequirements: C++17, GNU make
 Imports:
     jsonlite,
+    stats,
+    tools,
     utils
 Suggests:
     testthat (>= 3.0.0),

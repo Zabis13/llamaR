@@ -15,8 +15,17 @@
 #include <cinttypes>
 #include <vector>
 
+#include <R_ext/Print.h>   // REprintf — keep logging off stderr (CRAN-safe)
+
 //#define MTMD_AUDIO_DEBUG
 
+// Audio input (miniaudio) is compiled out by default: llamaR ships vision/OCR
+// only, and miniaudio is ~4MB of vendored C with pragmas that suppress
+// important diagnostics (R CMD check WARNING). Define LLAMAR_ENABLE_AUDIO to
+// build it back in; the header lives at tools/vendor-audio/miniaudio.h (kept
+// out of the package tarball via .Rbuildignore), so an audio build also needs
+// -I<path-to>/tools/vendor-audio on the include path.
+#ifdef LLAMAR_ENABLE_AUDIO
 #define MINIAUDIO_IMPLEMENTATION
 #ifndef MTMD_AUDIO_DEBUG
 #   define MA_NO_ENCODING
@@ -28,6 +37,7 @@
 #define MA_NO_GENERATION
 #define MA_API static
 #include "miniaudio/miniaudio.h"
+#endif // LLAMAR_ENABLE_AUDIO
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
@@ -44,8 +54,10 @@ struct mtmd_helper_logger {
     ggml_log_callback default_callback = [](ggml_log_level level, const char * text, void * user_data) {
         (void) level;
         (void) user_data;
-        fputs(text, stderr);
-        fflush(stderr);
+        // R-safe: go through REprintf instead of stderr. This TU is excluded
+        // from the force-included r_llama_compat.h (it also compiles miniaudio,
+        // whose own stdio must stay untouched), so we redirect explicitly.
+        REprintf("%s", text);
     };
 
     ggml_log_callback log_callback = default_callback;
@@ -436,6 +448,7 @@ static bool is_audio_file(const char * buf, size_t len) {
     return is_wav || is_mp3 || is_flac;
 }
 
+#ifdef LLAMAR_ENABLE_AUDIO
 // returns true if the buffer is a valid audio file
 static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int target_sampler_rate, std::vector<float> & pcmf32_mono) {
     ma_result result;
@@ -475,11 +488,13 @@ static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int 
     ma_decoder_uninit(&decoder);
     return true;
 }
+#endif // LLAMAR_ENABLE_AUDIO
 
 } // namespace audio_helpers
 
 mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len) {
     if (audio_helpers::is_audio_file((const char *)buf, len)) {
+#ifdef LLAMAR_ENABLE_AUDIO
         std::vector<float> pcmf32;
         const int sample_rate = mtmd_get_audio_sample_rate(ctx);
         if (sample_rate < 0) {
@@ -491,6 +506,11 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigne
             return nullptr;
         }
         return mtmd_bitmap_init_from_audio(pcmf32.size(), pcmf32.data());
+#else
+        (void) ctx;
+        LOG_ERR("Audio input is not supported in this build (compiled without LLAMAR_ENABLE_AUDIO)\n");
+        return nullptr;
+#endif // LLAMAR_ENABLE_AUDIO
     }
 
     // otherwise, we assume it's an image

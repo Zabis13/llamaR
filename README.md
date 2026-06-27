@@ -13,6 +13,7 @@ The package supports GPU acceleration via Vulkan, and automatically falls back t
 - OpenAI-compatible HTTP server for local models (`llama_serve_openai`) — connect OpenCode, ellmer, the `openai` SDK, etc.
 - Anthropic Messages API server (`llama_serve_anthropic`) with tool use — run Claude Code against a local model via `ANTHROPIC_BASE_URL`.
 - ellmer `Chat` objects backed by local models (`chat_llamar`) — use the ellmer/ragnar toolchain against local inference
+- Tool-aware chat layer (`llama_chat_build`, `llama_chat_parse`) — apply a model's template with tool definitions and parse tool calls back out, with lazy-grammar constraining
 - Multimodal (vision) inference (`llama_mtmd_load`, `llama_image_load`, `llama_image_eval`) — vision/OCR models via an mmproj projector
 - Embedding extraction: single (`llama_embeddings`), batch (`llama_embed_batch`), ragnar-compatible (`embed_llamar`)
 - Hugging Face integration: download and cache models (`llama_hf_download`, `llama_load_model_hf`, etc.)
@@ -94,8 +95,9 @@ Two guides walk through the package in depth:
 
 - **Getting Started** — loading models, generation, chat templates,
   tokenization, and embeddings.
-- **Chat and Agents** — `chat_llamar()`, the OpenAI-compatible server,
-  connecting OpenCode/ellmer, and retrieval-augmented chat with ragnar.
+- **Chat and Agents** — `chat_llamar()`, the OpenAI and Anthropic servers
+  (OpenCode / ellmer / Claude Code), tool calling, and retrieval-augmented
+  chat with ragnar.
 
 ```r
 browseVignettes("llamaR")

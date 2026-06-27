@@ -13,6 +13,7 @@ llama_serve_anthropic(
   host = "127.0.0.1",
   max_tokens = 1024L,
   strip_thinking = TRUE,
+  enable_thinking = FALSE,
   ...
 )
 }
@@ -42,6 +43,14 @@ response text before returning (default \code{TRUE}). Reasoning models
 in the text, so Claude Code expects clean content. Non-reasoning models
 (Qwen, Mistral, Llama) emit no such blocks, so this is a no-op for them. Set
 \code{FALSE} to keep the reasoning visible (e.g. for debugging).}
+
+\item{enable_thinking}{Ask the chat template to enable the model's reasoning
+mode (default \code{FALSE}). Hybrid thinking models (Qwen3.5, etc.) otherwise
+spend their whole token budget inside an unclosed \code{<think>} block and
+never reach the answer, which \code{strip_thinking} then turns into an empty
+reply. Kept \code{FALSE} so Claude Code gets direct answers and fast tool
+calls; set \code{TRUE} only if you also raise \code{max_tokens} enough for
+the model to finish reasoning. No effect on non-thinking models.}
 
 \item{...}{Reserved for future options.}
 }

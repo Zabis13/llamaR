@@ -14,13 +14,18 @@ knitr::opts_chunk$set(eval = FALSE, purl = FALSE)
 ```
 
 llamaR turns a local GGUF model into a chat backend for the R ecosystem. You
-can talk to it three ways, from lowest to highest level:
+can talk to it several ways, from lowest to highest level:
 
 * **HTTP server** — `llama_serve_openai()` exposes an OpenAI-compatible API any
   client can hit (OpenCode, the `openai` SDK, `curl`).
+* **Anthropic server** — `llama_serve_anthropic()` exposes an Anthropic Messages
+  API so **Claude Code** runs against local inference (see section 7).
 * **ellmer `Chat`** — `chat_llamar()` returns an `ellmer::Chat`, so the whole
   ellmer / ragnar toolchain works against local inference.
 * **Command-line example** — `inst/examples/chat.R` wraps both for quick use.
+
+Both servers share a tool-aware chat layer (`llama_chat_build()` /
+`llama_chat_parse()`) so tool-calling models work end to end (section 6).
 
 ```{r, eval=FALSE, purl=FALSE}
 library(llamaR)
@@ -165,15 +170,97 @@ ragnar_register_tool_retrieve(chat, store)
 chat$chat("What do the documents say about X?")
 ```
 
-> **Note.** Tool calling is mediated by the OpenAI protocol, so it works only
-> as far as the server implements it. The current server does not emit
-> `tool_calls` yet, so a model will not autonomously invoke the registered
-> retrieve tool. Plain chat and manual retrieval work today; automatic
-> tool-driven retrieval is on the roadmap (see `TODO.md`).
+> **Note.** Tool calling is mediated by the chat protocol. Both servers emit
+> `tool_calls` (the tool-aware chat layer, see section 6), so a tool-calling
+> model can autonomously invoke the registered retrieve tool. Tool-calling
+> quality is model-dependent — capable models (e.g. Qwen3) drive retrieval
+> reliably; very small models may need manual retrieval.
 
 ---
 
-## 5. Concurrency
+## 5. Tool calling: `llama_chat_build()` / `llama_chat_parse()`
+
+The servers above call a lower-level, tool-aware chat layer you can also use
+directly. `llama_chat_build()` applies the model's chat template to messages
+**plus tool definitions** and returns everything needed to constrain and parse
+a tool call; `llama_chat_parse()` turns the raw output back into structured
+tool calls.
+
+```{r, eval=FALSE, purl=FALSE}
+tools <- list(list(
+  type = "function",
+  "function" = list(
+    name        = "get_weather",
+    description = "Get the current weather for a city.",
+    parameters  = list(
+      type       = "object",
+      properties = list(city = list(type = "string")),
+      required   = list("city")
+    )
+  )
+))
+
+messages <- list(list(role = "user", content = "What's the weather in Paris?"))
+
+built <- llama_chat_build(model, messages, tools = tools)
+# built$prompt   — the formatted prompt to feed the model
+# built$grammar  — grammar that constrains tool-call output
+# built$format   — format id to pass to llama_chat_parse()
+# built$grammar_lazy, built$trigger_patterns, built$trigger_tokens,
+# built$additional_stops, built$preserved_tokens, built$parser
+```
+
+Generate against the returned prompt and grammar, then parse. Pass the lazy
+triggers **only when `built$grammar_lazy` is `TRUE`**:
+
+```{r, eval=FALSE, purl=FALSE}
+lazy <- isTRUE(built$grammar_lazy)
+raw <- llama_generate(
+  ctx, built$prompt,
+  grammar          = built$grammar,
+  trigger_patterns = if (lazy) built$trigger_patterns,
+  trigger_tokens   = if (lazy) built$trigger_tokens
+)
+
+parsed <- llama_chat_parse(raw, format = built$format, parser = built$parser)
+parsed$content        # assistant text (may be empty for a pure tool call)
+parsed$tool_calls     # data frame: name, arguments (JSON string), id
+```
+
+Tool-calling quality is model-dependent: capable models (e.g. Qwen3) emit clean
+tool calls; very small models are less reliable.
+
+---
+
+## 6. Claude Code on a local model: `llama_serve_anthropic()`
+
+`llama_serve_anthropic()` exposes an **Anthropic Messages API** so Claude Code
+(or any Anthropic SDK client) runs against local inference. It uses the
+tool-aware layer from section 5 and streams the Anthropic SSE event sequence.
+Like the OpenAI server it needs the optional **drogonR** package.
+
+```{r, eval=FALSE, purl=FALSE}
+llama_serve_anthropic("model.gguf", port = 11435L, n_ctx = 32768L)
+```
+
+It serves `POST /v1/messages` and `GET /v1/models`. Point Claude Code at it via
+environment variables:
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:11435
+export ANTHROPIC_API_KEY=local   # any non-empty value
+claude
+```
+
+`enable_thinking` (default `FALSE`) toggles the chat template's reasoning mode
+for hybrid thinking models (Qwen3.5, etc.). It is off by default so Claude Code
+gets direct answers and fast tool calls; set it `TRUE` (and raise `max_tokens`)
+to keep the reasoning trace. A runnable launcher lives at
+`inst/examples/claude_code_launcher.sh`.
+
+---
+
+## 7. Concurrency
 
 The server is **single-sequence**: it handles one request at a time on the main
 R thread. That is enough for a single local user or agent. For parallel
@@ -192,5 +279,7 @@ chats <- lapply(ports, function(p)
 ## See also
 
 * `vignette("getting-started")` — the rest of the package.
-* `?chat_llamar`, `?llama_serve_openai`
-* `inst/examples/chat.R`, `inst/examples/serve_openai.R`
+* `?chat_llamar`, `?llama_serve_openai`, `?llama_serve_anthropic`
+* `?llama_chat_build`, `?llama_chat_parse`
+* `inst/examples/chat.R`, `inst/examples/serve_openai.R`,
+  `inst/examples/claude_code_launcher.sh`

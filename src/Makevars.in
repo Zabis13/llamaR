@@ -72,11 +72,12 @@ JINJA_CPP = $(wildcard jinja/*.cpp)
 # Model implementations
 MODELS_CPP = $(wildcard models/*.cpp)
 
-# Multimodal (vision/audio) subsystem — vendored from llama.cpp master tools/mtmd/.
+# Multimodal (vision) subsystem — vendored from llama.cpp master tools/mtmd/.
 # clip ViT/projector engine + mtmd dispatcher + per-encoder graphs (mtmd/models/).
 # Mirrors the upstream layout so include paths inside these files need no edits;
-# GCC resolves "..." includes relative to each file's own directory. Header-only
-# vendored deps live in mtmd/stb/ and mtmd/miniaudio/. mtmd-debug.cpp (a CLI
+# GCC resolves "..." includes relative to each file's own directory. The header-
+# only image decoder lives in vendor/stb/. Audio (miniaudio) is compiled out by
+# default (see mtmd-helper.cpp / LLAMAR_ENABLE_AUDIO). mtmd-debug.cpp (a CLI
 # utility pulling common/arg/log) is intentionally NOT compiled — the
 # mtmd_debug_* symbols it declares are defined inside mtmd.cpp.
 MTMD_CPP = $(wildcard mtmd/*.cpp mtmd/models/*.cpp)
@@ -91,15 +92,28 @@ llama-quant.o: PKG_CPPFLAGS += -include r_llama_compat.h
 unicode.o: PKG_CPPFLAGS += -include r_llama_compat.h
 json-partial.o: PKG_CPPFLAGS += -include r_llama_compat.h
 json-schema-to-grammar.o: PKG_CPPFLAGS += -include r_llama_compat.h
+log.o: PKG_CPPFLAGS += -include r_llama_compat.h
+
+# jinja + mtmd objects leak stderr/stdout/__printf_chk symbols (R CMD check
+# flags these as non-portable); force-include the redirect header so they go
+# through REprintf. Comes after the -Imtmd rule below via append.
+$(JINJA_CPP:.cpp=.o): PKG_CPPFLAGS += -include r_llama_compat.h
 
 # mtmd objects need -Imtmd so cross-includes like debug/mtmd-debug.h -> "mtmd.h"
 # resolve (upstream builds tools/mtmd with -Itools/mtmd). -Ivendor mirrors how
-# upstream resolves the vendored single-headers ("stb/stb_image.h",
-# "miniaudio/miniaudio.h") from src/vendor/ (= upstream's vendor/). Scoped to
-# mtmd objects only; the core engine does not include any mtmd/clip headers, so
-# this cannot shadow core headers. NB: we deliberately do NOT add -Imtmd/models
-# globally — that would let our src/models/*.cpp pick up mtmd/models/models.h.
+# upstream resolves the vendored single-header "stb/stb_image.h" from src/vendor/
+# (= upstream's vendor/). Scoped to mtmd objects only; the core engine does not
+# include any mtmd/clip headers, so this cannot shadow core headers. NB: we
+# deliberately do NOT add -Imtmd/models globally — that would let our
+# src/models/*.cpp pick up mtmd/models/models.h.
 $(MTMD_CPP:.cpp=.o): PKG_CPPFLAGS += -Imtmd -Ivendor
+
+# Force the stderr/stdout redirect on the mtmd C++ objects (clip/mtmd leak those
+# symbols). mtmd-helper.o is deliberately excluded: it compiles miniaudio inline
+# via MINIAUDIO_IMPLEMENTATION, and overriding exit/fprintf/stderr there could
+# break that vendored C code — it calls REprintf explicitly instead.
+MTMD_COMPAT_OBJ = $(filter-out mtmd/mtmd-helper.o, $(MTMD_CPP:.cpp=.o))
+$(MTMD_COMPAT_OBJ): PKG_CPPFLAGS += -include r_llama_compat.h
 
 # The R<->mtmd bridge includes mtmd.h / mtmd-helper.h from src/mtmd/.
 r_mtmd_interface.o: PKG_CPPFLAGS += -Imtmd

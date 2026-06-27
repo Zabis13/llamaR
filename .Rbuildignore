@@ -10,6 +10,7 @@
 ^CRAN-SUBMISSION$
 ^\.claude$
 ^TODO\.md$
+^tools$
 ^src/.*\.o$
 ^src/models/.*\.o$
 ^src/Makevars$

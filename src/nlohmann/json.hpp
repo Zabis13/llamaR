@@ -17514,7 +17514,9 @@ class binary_writer
     {
 #ifdef __GNUC__
 #pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wfloat-equal"
+// -Wfloat-equal suppression removed for CRAN (R CMD check flags it as hiding an
+// important diagnostic); the float range checks below compare against exact
+// limits intentionally, so any -Wfloat-equal warning here is benign.
 #endif
         if (static_cast<double>(n) >= static_cast<double>(std::numeric_limits<float>::lowest()) &&
                 static_cast<double>(n) <= static_cast<double>((std::numeric_limits<float>::max)()) &&
@@ -18696,7 +18698,9 @@ char* to_chars(char* first, const char* last, FloatType value)
 
 #ifdef __GNUC__
 #pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wfloat-equal"
+// -Wfloat-equal suppression removed for CRAN (R CMD check flags it as hiding an
+// important diagnostic); the float range checks below compare against exact
+// limits intentionally, so any -Wfloat-equal warning here is benign.
 #endif
     if (value == 0) // +-0
     {
@@ -23725,7 +23729,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     {
 #ifdef __GNUC__
 #pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wfloat-equal"
+// -Wfloat-equal suppression removed for CRAN (R CMD check flags it as hiding an
+// important diagnostic); the float range checks below compare against exact
+// limits intentionally, so any -Wfloat-equal warning here is benign.
 #endif
         const_reference lhs = *this;
         JSON_IMPLEMENT_OPERATOR( ==, true, false, false)
@@ -23829,7 +23835,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     {
 #ifdef __GNUC__
 #pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wfloat-equal"
+// -Wfloat-equal suppression removed for CRAN (R CMD check flags it as hiding an
+// important diagnostic); the float range checks below compare against exact
+// limits intentionally, so any -Wfloat-equal warning here is benign.
 #endif
         JSON_IMPLEMENT_OPERATOR( ==, true, false, false)
 #ifdef __GNUC__

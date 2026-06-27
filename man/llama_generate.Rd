@@ -69,6 +69,15 @@ gpu_sync (cumulative across decode-loop iterations), sample (cumulative),
 decode_dispatch (cumulative), detokenize, plus n_iterations and t_total_ms.
 Adds llama_synchronize calls inside the loop, so it is intended for
 profiling and may slightly slow generation.}
+
+\item{trigger_patterns}{Character vector of regular expressions that lazily
+activate a grammar (e.g. the prefix a model emits before a tool call). Only
+meaningful alongside a lazy \code{grammar}; \code{NULL} (default) applies the
+grammar from the first token. Supplied by \code{\link{llama_chat_build}}.}
+
+\item{trigger_tokens}{Integer vector of token IDs that lazily activate the
+grammar, the token-level counterpart to \code{trigger_patterns}. \code{NULL}
+(default) means none.}
 }
 \value{
 A character scalar containing the generated text (excluding the

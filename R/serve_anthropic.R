@@ -42,7 +42,7 @@
                 type = "function",
                 "function" = list(
                     name      = b$name %||% "",
-                    arguments = jsonlite::toJSON(b$input %||% setNames(list(), character()),
+                    arguments = jsonlite::toJSON(b$input %||% stats::setNames(list(), character()),
                                                  auto_unbox = TRUE)
                 )
             )
@@ -152,12 +152,6 @@
     # unclosed opener: drop it and everything after (reasoning not yet complete)
     cleaned <- gsub("(?s)<think>.*$", "", cleaned, perl = TRUE)
     cleaned <- sub("^[[:space:]\r\n]+", "", cleaned)
-    # Safety net: a thinking model can spend the whole budget inside an unclosed
-    # <think> and never reach the answer. Stripping then leaves nothing, which the
-    # client sees as an empty reply. If the original had content but stripping ate
-    # all of it, surface the raw text (reasoning is better than silence) — the real
-    # fix is enable_thinking=FALSE, this only guards the degenerate case.
-    if (!nzchar(cleaned) && nzchar(txt)) return(txt)
     cleaned
 }
 
@@ -184,13 +178,6 @@
                 input = input
             )
         }
-    }
-    # Never return empty content: Claude Code rejects a message with no content
-    # blocks as "empty or malformed response". If parsing yielded nothing usable,
-    # fall back to a single (possibly raw) text block.
-    if (length(blocks) == 0) {
-        fb <- if (nzchar(parsed$content %||% "")) parsed$content else " "
-        blocks[[1]] <- list(type = "text", text = fb)
     }
     blocks
 }
@@ -365,12 +352,22 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
         build_message_body <- function(raw, n) {
             parsed <- llama_chat_parse(raw, format = built$format,
                                        parser = built$parser)
+            blocks <- .anthropic_content_blocks(parsed, strip_thinking)
+            # Never return empty content: Claude Code rejects a message with no
+            # content blocks as "empty or malformed response". A thinking model
+            # can also spend its whole budget inside an unclosed <think> and
+            # never reach the answer; stripping then leaves nothing. Fall back to
+            # a single (possibly raw) text block — reasoning beats silence.
+            if (length(blocks) == 0) {
+                fb <- if (nzchar(parsed$content %||% "")) parsed$content else " "
+                blocks <- list(list(type = "text", text = fb))
+            }
             list(
                 id      = id,
                 type    = "message",
                 role    = "assistant",
                 model   = model_id,
-                content = .anthropic_content_blocks(parsed, strip_thinking),
+                content = blocks,
                 stop_reason   = .anthropic_stop_reason(parsed, n >= req_max),
                 stop_sequence = NA,
                 usage = list(input_tokens = prompt_tokens, output_tokens = n)
@@ -645,7 +642,7 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
                             sse("content_block_start", list(
                                 type = "content_block_start", index = idx,
                                 content_block = list(type = "tool_use", id = tuid,
-                                                     name = tc$name[i], input = setNames(list(), character())))),
+                                                     name = tc$name[i], input = stats::setNames(list(), character())))),
                             sse("content_block_delta", list(
                                 type = "content_block_delta", index = idx,
                                 delta = list(type = "input_json_delta",

@@ -6,7 +6,9 @@
 #include "regex-partial.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -134,8 +136,12 @@ common_chat_msg_parser::common_chat_msg_parser(const std::string & input, bool i
 {
     result_.role = "assistant";
 
+    // Healing marker: a short token guaranteed absent from the input. Uses a
+    // monotonic counter rather than std::rand() (which R CMD check flags as a
+    // non-portable RNG, and which is unseeded/deterministic anyway).
+    static std::atomic<uint64_t> healing_counter{0};
     while (true) {
-        std::string id = std::to_string(std::rand());
+        std::string id = std::to_string(healing_counter.fetch_add(1));
         if (input.find(id) == std::string::npos) {
             healing_marker_ = id;
             break;

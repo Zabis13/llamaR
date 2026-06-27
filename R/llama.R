@@ -403,6 +403,13 @@ llama_detokenize <- function(ctx, tokens) {
 #' @param mirostat_tau Mirostat target entropy (tau parameter)
 #' @param mirostat_eta Mirostat learning rate (eta parameter)
 #' @param grammar GBNF grammar string for constrained generation (NULL = disabled)
+#' @param trigger_patterns Character vector of regular expressions that lazily
+#'   activate a grammar (e.g. the prefix a model emits before a tool call). Only
+#'   meaningful alongside a lazy \code{grammar}; \code{NULL} (default) applies the
+#'   grammar from the first token. Supplied by \code{\link{llama_chat_build}}.
+#' @param trigger_tokens Integer vector of token IDs that lazily activate the
+#'   grammar, the token-level counterpart to \code{trigger_patterns}. \code{NULL}
+#'   (default) means none.
 #' @param with_timings If TRUE, attach a named numeric vector of per-stage
 #'   timings (in ms) as attribute "timings" of the returned text. Stages:
 #'   tokenize, build_sampler, kv_clear, prefill_dispatch, prefill_sync,
