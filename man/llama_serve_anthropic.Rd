@@ -9,6 +9,7 @@ llama_serve_anthropic(
   port = 11435L,
   n_ctx = 32768L,
   n_gpu_layers = -1L,
+  split_mode = "layer",
   model_id = NULL,
   host = "127.0.0.1",
   max_tokens = 1024L,
@@ -33,6 +34,13 @@ Code sends a large system prompt (tool definitions + rules, often
 further for long sessions if the model supports it.}
 
 \item{n_gpu_layers}{Layers to offload to GPU (\code{-1} = all).}
+
+\item{split_mode}{Multi-GPU split strategy, passed to
+\code{\link{llama_load_model}}: \code{"layer"} (default) splits the model
+across all GPUs by layer, \code{"none"} loads it whole onto a single GPU,
+\code{"row"} splits tensors by row. On a multi-GPU host the \code{"layer"}
+default can hang on the Vulkan backend (cross-device copies); use
+\code{"none"} to pin the model to one card when it fits in that card's VRAM.}
 
 \item{model_id}{Identifier echoed in responses and \code{/v1/models}.
 Defaults to the model file's base name.}

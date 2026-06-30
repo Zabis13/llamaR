@@ -26,6 +26,11 @@ PORT="11435"
 # past 50k tokens. A 32k window then can't fit the prompt and the request fails.
 # Default to a large window; override with N_CTX=... if VRAM is tight.
 N_CTX="${N_CTX:-65536}"
+# Multi-GPU split strategy passed to llama_serve_anthropic(). Default "layer"
+# splits the model across all GPUs; on a multi-GPU host the Vulkan backend can
+# hang doing cross-device copies. Set SPLIT_MODE=none to pin the model to a
+# single card (recommended when the model fits in one GPU's VRAM).
+SPLIT_MODE="${SPLIT_MODE:-layer}"
 # Vision (optional second model): VISION_MODEL is a vision-capable GGUF and
 # MMPROJ its paired clip projector. When both are set, image requests route to
 # this model; everything else stays on MODEL. Set both empty for a text-only
@@ -83,7 +88,7 @@ fi
 
 echo ">> starting llamaR Anthropic server"
 echo "   model: $(basename "$MODEL")"
-echo "   port:  $PORT   n_ctx: $N_CTX   log: $LOG"
+echo "   port:  $PORT   n_ctx: $N_CTX   split_mode: $SPLIT_MODE   log: $LOG"
 # Run the server in its own process group (setsid) so we can signal the whole
 # group on cleanup. Rscript forks an inner `exec/R` that actually listens; killing
 # only the Rscript wrapper would orphan it, so we target the group instead.
@@ -96,7 +101,7 @@ if [ -n "$VISION_MODEL" ] && [ -n "$MMPROJ" ]; then
     echo "   vision: SKIPPED (model or mmproj file missing)" >&2
   fi
 fi
-setsid Rscript -e "llamaR::llama_serve_anthropic('$MODEL', port=${PORT}L, n_ctx=${N_CTX}L${VISION_ARG})" >"$LOG" 2>&1 &
+setsid Rscript -e "llamaR::llama_serve_anthropic('$MODEL', port=${PORT}L, n_ctx=${N_CTX}L, split_mode='$SPLIT_MODE'${VISION_ARG})" >"$LOG" 2>&1 &
 SRV_PID=$!
 
 cleanup() {

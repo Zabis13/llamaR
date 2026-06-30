@@ -293,6 +293,12 @@
 #'   20k+ tokens), so a small context window rejects every request. Raise it
 #'   further for long sessions if the model supports it.
 #' @param n_gpu_layers Layers to offload to GPU (\code{-1} = all).
+#' @param split_mode Multi-GPU split strategy, passed to
+#'   \code{\link{llama_load_model}}: \code{"layer"} (default) splits the model
+#'   across all GPUs by layer, \code{"none"} loads it whole onto a single GPU,
+#'   \code{"row"} splits tensors by row. On a multi-GPU host the \code{"layer"}
+#'   default can hang on the Vulkan backend (cross-device copies); use
+#'   \code{"none"} to pin the model to one card when it fits in that card's VRAM.
 #' @param model_id Identifier echoed in responses and \code{/v1/models}.
 #'   Defaults to the model file's base name.
 #' @param host Address to bind. Default \code{"127.0.0.1"} (local only).
@@ -341,6 +347,7 @@
 #' }
 llama_serve_anthropic <- function(model_path, port = 11435L,
                                   n_ctx = 32768L, n_gpu_layers = -1L,
+                                  split_mode = "layer",
                                   model_id = NULL, host = "127.0.0.1",
                                   max_tokens = 1024L, strip_thinking = TRUE,
                                   enable_thinking = FALSE,
@@ -368,7 +375,8 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
     model_id <- model_id %||% tools::file_path_sans_ext(basename(model_path))
 
     # Text model (primary): used for all non-image requests.
-    model <- llama_load_model(model_path, n_gpu_layers = as.integer(n_gpu_layers))
+    model <- llama_load_model(model_path, n_gpu_layers = as.integer(n_gpu_layers),
+                              split_mode = split_mode)
     ctx   <- llama_new_context(model, n_ctx = as.integer(n_ctx))
     ctx_size <- llama_n_ctx(ctx)
 
@@ -381,7 +389,8 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
     # (text-only, image blocks dropped) — backward compatible.
     vl_model <- NULL; vl_ctx <- NULL; vl_ctx_size <- 0L; mctx <- NULL
     if (vision_on) {
-        vl_model <- llama_load_model(vision_model_path, n_gpu_layers = as.integer(n_gpu_layers))
+        vl_model <- llama_load_model(vision_model_path, n_gpu_layers = as.integer(n_gpu_layers),
+                                     split_mode = split_mode)
         vl_ctx   <- llama_new_context(vl_model, n_ctx = as.integer(vision_n_ctx))
         vl_ctx_size <- llama_n_ctx(vl_ctx)
         mctx     <- llama_mtmd_load(vl_model, mmproj_path)

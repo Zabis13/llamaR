@@ -69,6 +69,129 @@ remotes::install_github("Zabis13/llamaR")
 - C++17 compiler
 - GNU make
 
+### Full Linux setup (Ubuntu) — install and run Claude Code
+
+End-to-end instructions: R, the Vulkan toolchain, ggmlR/llamaR, Claude Code, a
+model, and the Anthropic server. Tested on Ubuntu 22.04 (Jammy) and 24.04
+(Noble).
+
+**1. R and the Vulkan runtime:**
+
+```bash
+sudo apt install -y r-base
+sudo apt install vulkan-tools libvulkan-dev
+```
+
+**2. The `glslc` shader compiler** (needed to build ggmlR's Vulkan backend):
+
+```bash
+# Ubuntu 24.04 (Noble)
+sudo add-apt-repository universe
+sudo apt update
+sudo apt install glslc
+```
+
+```bash
+# Ubuntu 22.04 (Jammy) — install the LunarG Vulkan SDK instead
+wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | \
+  sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
+
+sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list \
+  https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+
+sudo apt update
+sudo apt install -y vulkan-sdk
+```
+
+Verify the GPU is visible to Vulkan:
+
+```bash
+vulkaninfo --summary
+```
+
+**3. ggmlR** (the tensor backend, built with SIMD):
+
+```bash
+sudo Rscript -e 'install.packages("ggmlR", configure.args = "--with-simd")'
+
+Rscript -e 'library(ggmlR)
+ggml_vulkan_status()'
+```
+
+**4. llamaR** (plus `drogonR` for the HTTP servers):
+
+```bash
+sudo Rscript -e 'install.packages("llamaR")'
+sudo Rscript -e 'install.packages("drogonR")'
+```
+
+Or install the development version from GitHub:
+
+```bash
+sudo apt install -y libcurl4-openssl-dev libssl-dev libgit2-dev
+sudo Rscript -e 'install.packages("remotes")'
+sudo Rscript -e 'remotes::install_github("Zabis13/llamaR")'
+sudo Rscript -e 'install.packages("drogonR")'
+```
+
+**5. Claude Code:**
+
+```bash
+sudo apt install npm
+npm install -g @anthropic-ai/claude-code
+```
+
+**6. Download a model** from Hugging Face:
+
+```bash
+pip install -U "huggingface_hub[cli]"
+mkdir -p ~/llm_models
+
+hf download unsloth/Qwen3.5-9B-GGUF \
+  Qwen3.5-9B-UD-Q6_K_XL.gguf \
+  --local-dir ~/llm_models
+```
+
+```
+✓ Downloaded
+  path: /home/user/llm_models/Qwen3.5-9B-UD-Q6_K_XL.gguf
+```
+
+**7. Start the llamaR Anthropic server and run Claude Code.** Start the server:
+
+```bash
+Rscript -e "llamaR::llama_serve_anthropic('/home/user/llm_models/Qwen3.5-9B-UD-Q6_K_XL.gguf', port=11435L)"
+```
+
+Then, in another shell, point Claude Code at it and launch:
+
+```bash
+unset ANTHROPIC_API_KEY
+export ANTHROPIC_BASE_URL=http://127.0.0.1:11435
+export ANTHROPIC_AUTH_TOKEN=sk-local
+export CLAUDE_CODE_SKIP_PREFLIGHT_CHECK=1
+export ANTHROPIC_MODEL=Qwen3.5-9B-UD-Q6_K_XL
+export ANTHROPIC_SMALL_FAST_MODEL=Qwen3.5-9B-UD-Q6_K_XL
+claude
+```
+
+Or use the bundled launcher, which starts the server, waits for it, and runs
+Claude Code in one step:
+
+```bash
+SCRIPT=$(Rscript -e "cat(system.file('examples/claude_code_launcher.sh', package='llamaR'))")
+
+VISION_MODEL= MMPROJ= \
+  bash "$SCRIPT" \
+  /home/user/llm_models/Qwen3.5-9B-UD-Q6_K_XL.gguf 11435
+```
+
+> **Multi-GPU note:** on a host with several GPUs the model is split across all
+> of them by default (`split_mode = "layer"`), which can hang on the Vulkan
+> backend. If the model fits in a single card's VRAM, pin it to one GPU with
+> `SPLIT_MODE=none` (launcher) or `split_mode = "none"`
+> (`llama_serve_anthropic()`).
+
 ## Quick Start
 
 ```r
