@@ -1,5 +1,37 @@
 ## TODO
 
+### ✅ VISION ЧЕРЕЗ CLAUDE CODE + ФИКСЫ (сессия 2026-06-29, в 0.2.5)
+Двухмодельный vision-сервер живой через Claude Code. Обновлены NEWS/README/TODO.
+- [x] **Segfault `fflush((FILE*)1)` в фоновом потоке логгера.** chat_build на
+      Qwen3.5+tools ронял serve_anthropic (Claude Code "ConnectionRefused").
+      Причина: `r_llama_compat.h` редиректит stdout/stderr→(FILE*)1 и оборачивает
+      fprintf/fputs/printf, но НЕ fflush; log.cpp worker (фоновый поток) делал
+      fflush(sentinel)→SIGSEGV (асинхронно→ASan не ловил). Фикс: обёртка fflush в
+      r_llama_compat.h (no-op для sentinel). Проверены все force-include файлы —
+      других необёрнутых stdio-вызовов с sentinel нет.
+- [x] **`llama_gen_begin_at()`** (C `r_llama_gen_begin_at` + R + NAMESPACE):
+      генерация с УЖЕ заполненного KV (без clear/prefill) — для продолжения после
+      `llama_image_eval`. gen_begin чистит KV и стёр бы image-эмбеддинги.
+- [x] **Vision напрямую (R-API) РАБОТАЕТ** на Qwen2-VL-2B+mmproj: красный круг →
+      "red circle". Пайплайн mtmd_load→image_load→image_eval→gen_begin_at→gen_next.
+- [x] **Vision через Claude Code (двухмодельный serve_anthropic), caption-then-reason.**
+      `llama_serve_anthropic(model_path, vision_model_path=, mmproj_path=, vision_n_ctx=8192L,
+      vision_debug=FALSE)`: грузит ОБЕ модели. Картинка (Anthropic base64 image-блок) →
+      Qwen2-VL описывает (фокус на вопросе юзера, `.vision_caption`) → маркер в messages
+      заменяется на "[Image description: ...]" → Qwen3.5 отвечает обычным текстовым путём
+      (tools/grammar/стрим). vision_model_path=NULL → text-only (обратно совместимо).
+      Проверено через Claude Code: "что на картинке?" → связный ответ. KV vision-ctx
+      чистится перед image_eval (M-RoPE требует возрастающих позиций — иначе segfault на
+      повторном запросе).
+- [x] Юнит-тесты парсинга image-блоков (tests/testthat/test-serve-anthropic.R, light):
+      base64→файл round-trip, marker-вставка, text-only роняет картинку.
+- [x] Примеры: `inst/examples/serve_anthropic_vision.R` (запуск без Claude Code + curl
+      с base64 + --selftest), `claude_code_launcher.sh` (env VISION_MODEL/MMPROJ, по
+      умолчанию Qwen3.5+Qwen2-VL вместе).
+- [ ] ОСТАЛОСЬ (не блокеры 0.2.5): CRAN-редирект stderr/stdout в clip/mtmd; miniaudio.h
+      (4 МБ single-header) убрать/опционализировать; несколько картинок в одном запросе
+      сейчас даёт caption на каждую (ок), но без проверки порядка вставки на edge-кейсах.
+
 ### ✅ РЕЛИЗ 0.2.5 (сессия 2026-06-27)
 Движок переведён на классовый каркас master (128 арок), Qwen3.5 работает
 end-to-end, vision/mtmd на месте. Обновлены DESCRIPTION/NEWS/README/TODO.

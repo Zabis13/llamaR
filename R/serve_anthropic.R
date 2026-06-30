@@ -10,12 +10,36 @@
 
 # --- request translation: Anthropic -> internal (OpenAI-shape) messages -------
 
+# Decode one Anthropic image block's base64 payload to a temp file and return
+# its path, or NULL if the block has no usable inline data. Anthropic image
+# blocks look like {type:"image", source:{type:"base64", media_type:"image/png",
+# data:"...."}}. We only handle inline base64 (Claude Code sends screenshots
+# this way); URL sources are skipped.
+.anthropic_image_to_file <- function(b) {
+    src <- b$source
+    if (is.null(src) || !identical(src$type %||% "", "base64")) return(NULL)
+    data <- src$data
+    if (is.null(data) || !nzchar(data)) return(NULL)
+    mt  <- src$media_type %||% "image/png"
+    ext <- switch(mt, "image/png" = ".png", "image/jpeg" = ".jpg",
+                  "image/webp" = ".webp", "image/gif" = ".gif", ".png")
+    path <- tempfile("llamar_img_", fileext = ext)
+    writeBin(jsonlite::base64_dec(data), path)
+    path
+}
+
 # Anthropic `content` is either a plain string or a list of typed blocks
 # (text / tool_use / tool_result / image). Flatten one message's content into
 # the OpenAI shape llama_chat_build expects, returning a list of OpenAI-shape
 # messages (a single Anthropic message can expand into several, e.g. a user
 # turn carrying tool_result blocks becomes one or more `tool` role messages).
-.anthropic_content_to_openai <- function(role, content) {
+#
+# `img_acc` (optional environment with $paths and $marker): when supplied, image
+# blocks are decoded to temp files (paths appended to img_acc$paths) and the
+# media marker (img_acc$marker) is spliced into the text at the image position,
+# so the chat template wraps it correctly (e.g. <|vision_start|>..<|vision_end|>).
+# Without img_acc (text-only server), image blocks are dropped as before.
+.anthropic_content_to_openai <- function(role, content, img_acc = NULL) {
     # Plain string content: pass through unchanged.
     if (is.character(content) && length(content) == 1) {
         return(list(list(role = role, content = content)))
@@ -56,9 +80,18 @@
                 content = as.character(res_txt),
                 tool_call_id = b$tool_use_id %||% ""
             )
+        } else if (type == "image" && !is.null(img_acc)) {
+            # Vision enabled: decode the image and splice the media marker into
+            # the text where the image appeared, so chat_build's template wraps
+            # it. Without img_acc this falls through and the image is dropped.
+            p <- .anthropic_image_to_file(b)
+            if (!is.null(p)) {
+                img_acc$paths <- c(img_acc$paths, p)
+                text_parts <- c(text_parts, img_acc$marker)
+            }
         }
-        # Other block types are intentionally dropped: image blocks (local models
-        # here are text-only) and `thinking` blocks (we strip reasoning on output,
+        # Other block types are intentionally dropped: image blocks when vision
+        # is off (text-only) and `thinking` blocks (we strip reasoning on output,
         # so we never emit a valid signed thinking block for the client to echo
         # back; silently ignoring any that arrive keeps multi-turn robust).
     }
@@ -75,7 +108,13 @@
 }
 
 # Turn a full Anthropic request body into (system, messages) for llama_chat_build.
-.anthropic_to_messages <- function(body) {
+# When `marker` is non-NULL (vision server), image blocks are decoded to temp
+# files and the marker is spliced into the text; the decoded paths are attached
+# to the result as the "image_paths" attribute (NULL/empty when no images).
+.anthropic_to_messages <- function(body, marker = NULL) {
+    img_acc <- if (!is.null(marker)) {
+        e <- new.env(parent = emptyenv()); e$paths <- character(0); e$marker <- marker; e
+    } else NULL
     # Collect ALL system text into a single leading system message. Chat templates
     # (DeepSeek, Qwen, ...) expect exactly one system turn at the start; emitting a
     # second one — e.g. Claude Code sends a top-level `system` *and* a system role
@@ -101,7 +140,7 @@
 
     msgs <- list()
     for (m in raw) {
-        converted <- .anthropic_content_to_openai(m$role, m$content)
+        converted <- .anthropic_content_to_openai(m$role, m$content, img_acc)
         for (cm in converted) {
             if (identical(cm$role, "system")) {
                 # fold any system-role turn into the merged system text
@@ -116,7 +155,46 @@
         msgs <- c(list(list(role = "system",
                             content = paste(sys_parts, collapse = "\n\n"))), msgs)
     }
+    if (!is.null(img_acc)) attr(msgs, "image_paths") <- img_acc$paths
     msgs
+}
+
+# caption-then-reason: run ONE image through the vision model to produce a
+# textual observation, which the (stronger) text model then reasons over. The
+# vision model is asked to DESCRIBE what's relevant to the user's question, not
+# to answer it — the answer is the text model's job. Returns the caption string.
+#
+#   vl_model/vl_ctx/mctx : the vision pool member (model + its ctx + projector)
+#   image_path           : a decoded image file
+#   user_question        : the user's text for this turn (focuses the description)
+#   max_tokens           : caption length budget
+# The vision ctx KV is cleared first (M-RoPE needs strictly increasing positions
+# across turns; see the multi-turn fix). marker goes where the image belongs.
+.vision_caption <- function(vl_model, vl_ctx, mctx, image_path,
+                            user_question, max_tokens = 256L) {
+    marker <- llama_mtmd_marker()
+    q <- if (nzchar(user_question)) user_question else "the overall content"
+    prompt_msgs <- list(list(role = "user", content = paste0(
+        marker, "\nDescribe in detail what you see in this image, focusing on: ",
+        q)))
+    built <- llama_chat_build(vl_model, prompt_msgs, enable_thinking = FALSE)
+    if (!grepl(marker, built$prompt, fixed = TRUE)) {
+        stop("vision: media marker did not survive the vision model's chat ",
+             "template — the vision model likely lacks a vision slot.")
+    }
+    llama_memory_clear(vl_ctx)
+    bitmap <- llama_image_load(mctx, image_path)
+    n_past <- llama_image_eval(mctx, vl_ctx, built$prompt, bitmap)
+    st <- llama_gen_begin_at(vl_ctx, n_past, max_new_tokens = as.integer(max_tokens),
+                             temp = 0.3)
+    out <- character(0)
+    repeat {
+        chunk <- llama_gen_next(st)
+        if (is.null(chunk)) break
+        out <- c(out, chunk)
+    }
+    out <- c(out, llama_gen_end(st))
+    trimws(paste0(out, collapse = ""))
 }
 
 # Anthropic tools -> OpenAI tools shape that llama_chat_build expects.
@@ -232,6 +310,23 @@
 #'   reply. Kept \code{FALSE} so Claude Code gets direct answers and fast tool
 #'   calls; set \code{TRUE} only if you also raise \code{max_tokens} enough for
 #'   the model to finish reasoning. No effect on non-thinking models.
+#' @param vision_model_path Optional path to a SECOND, vision-capable GGUF model
+#'   (e.g. Qwen2-VL). When given together with \code{mmproj_path}, the server
+#'   uses a \emph{caption-then-reason} pipeline: a request carrying an image is
+#'   first passed to this vision model, which DESCRIBES the image (focused on the
+#'   user's question); that description is then spliced into the conversation as
+#'   text and answered by the main \code{model_path} model — so the stronger text
+#'   model does the reasoning, tool calls, and streaming, while the vision model
+#'   only provides "eyes". \code{NULL} (default) keeps the server text-only and
+#'   image blocks are dropped, as before.
+#' @param mmproj_path Path to the clip projector (mmproj) GGUF paired with
+#'   \code{vision_model_path}. Required to enable vision; must match that model.
+#' @param vision_n_ctx Context size for the vision model's own context
+#'   (default \code{8192}). Vision turns (screenshot + question) are short, so a
+#'   small KV cache keeps both models within VRAM.
+#' @param vision_debug If \code{TRUE}, log each vision caption to the server
+#'   console (not returned to the client). Default \code{FALSE}: the caption is
+#'   internal, the user sees only the text model's final answer.
 #' @param ... Reserved for future options.
 #'
 #' @return Invisibly \code{NULL}. Blocks serving until interrupted.
@@ -248,7 +343,9 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
                                   n_ctx = 32768L, n_gpu_layers = -1L,
                                   model_id = NULL, host = "127.0.0.1",
                                   max_tokens = 1024L, strip_thinking = TRUE,
-                                  enable_thinking = FALSE, ...) {
+                                  enable_thinking = FALSE,
+                                  vision_model_path = NULL, mmproj_path = NULL,
+                                  vision_n_ctx = 8192L, vision_debug = FALSE, ...) {
     if (!requireNamespace("drogonR", quietly = TRUE)) {
         stop("llama_serve_anthropic() requires the 'drogonR' package: ",
              "install.packages('drogonR')", call. = FALSE)
@@ -256,11 +353,42 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
     if (!file.exists(model_path)) {
         stop("model file not found: ", model_path, call. = FALSE)
     }
+    # Vision is enabled only when BOTH a vision model and its projector are given.
+    vision_on <- !is.null(vision_model_path) && !is.null(mmproj_path)
+    if (!is.null(vision_model_path) && !file.exists(vision_model_path)) {
+        stop("vision model file not found: ", vision_model_path, call. = FALSE)
+    }
+    if (!is.null(mmproj_path) && !file.exists(mmproj_path)) {
+        stop("mmproj (vision projector) file not found: ", mmproj_path, call. = FALSE)
+    }
+    if (xor(is.null(vision_model_path), is.null(mmproj_path))) {
+        stop("vision needs BOTH vision_model_path and mmproj_path (got only one).",
+             call. = FALSE)
+    }
     model_id <- model_id %||% tools::file_path_sans_ext(basename(model_path))
 
+    # Text model (primary): used for all non-image requests.
     model <- llama_load_model(model_path, n_gpu_layers = as.integer(n_gpu_layers))
     ctx   <- llama_new_context(model, n_ctx = as.integer(n_ctx))
     ctx_size <- llama_n_ctx(ctx)
+
+    # Vision model pool member: a SEPARATE model + its own (smaller) context +
+    # clip projector, loaded only when vision is enabled. Requests carrying an
+    # image are routed here; everything else stays on the text model. Both models
+    # live in VRAM at once, so the vision context is kept small (vision_n_ctx):
+    # screenshot + question turns are short and don't need a large KV cache.
+    # When vision_model_path is NULL the server behaves exactly as before
+    # (text-only, image blocks dropped) — backward compatible.
+    vl_model <- NULL; vl_ctx <- NULL; vl_ctx_size <- 0L; mctx <- NULL
+    if (vision_on) {
+        vl_model <- llama_load_model(vision_model_path, n_gpu_layers = as.integer(n_gpu_layers))
+        vl_ctx   <- llama_new_context(vl_model, n_ctx = as.integer(vision_n_ctx))
+        vl_ctx_size <- llama_n_ctx(vl_ctx)
+        mctx     <- llama_mtmd_load(vl_model, mmproj_path)
+        message(sprintf("vision enabled: model '%s' + mmproj '%s' (supports_vision=%s, n_ctx=%d)",
+                        basename(vision_model_path), basename(mmproj_path),
+                        llama_mtmd_support_vision(mctx), vl_ctx_size))
+    }
 
     # Single-ctx serialization queue. One shared ctx / KV cache means only one
     # request may generate at a time: a second concurrent request (Claude Code
@@ -433,7 +561,11 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
                 q_waiting <<- setdiff(q_waiting, ticket)
                 message(sprintf("[queue #%d] ACQUIRE ctx", ticket))  # DEBUG
 
-                messages <- .anthropic_to_messages(body)
+                # Vision: pass the media marker so image blocks are decoded and
+                # spliced into the message text; collect the decoded file paths.
+                vision_marker <- if (!is.null(mctx)) llama_mtmd_marker() else NULL
+                messages <- .anthropic_to_messages(body, marker = vision_marker)
+                img_paths <- attr(messages, "image_paths") %||% character(0)
                 tools    <- .anthropic_tools_to_openai(body$tools)
                 req_max  <<- as.integer(body$max_tokens %||% max_tokens)
                 tool_choice <- if (!is.null(body$tool_choice)) {
@@ -451,6 +583,48 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
                     req_max <<- as.integer(max(1L, floor(req_max * mult)))
                 }
 
+                has_image <- length(img_paths) > 0
+                # caption-then-reason: an image request is preprocessed by the
+                # VISION model into a textual observation, then answered by the
+                # TEXT model like any other turn (full tools/grammar/streaming).
+                # So we DON'T route the whole request to the small vision model;
+                # we only borrow its eyes. The user's question focuses the caption,
+                # then each image marker in the messages is replaced by
+                # "[Image description: ...]" and the rest of the pipeline runs
+                # purely on the text model.
+                if (has_image) {
+                    marker <- llama_mtmd_marker()
+                    # The user's question for this turn = the text around the
+                    # marker in the last user message (drives a focused caption).
+                    last_user <- ""
+                    for (mm in rev(messages)) if (identical(mm$role, "user")) { last_user <- mm$content %||% ""; break }
+                    user_q <- trimws(gsub(marker, " ", last_user, fixed = TRUE))
+                    captions <- vapply(img_paths, function(p)
+                        .vision_caption(vl_model, vl_ctx, mctx, p, user_q,
+                                        max_tokens = 256L), character(1))
+                    unlink(img_paths)
+                    if (isTRUE(vision_debug)) {
+                        for (cap in captions)
+                            message(sprintf("[queue #%d] vision caption: %s", ticket, cap))
+                    }
+                    # Replace each marker (in order) with its caption text.
+                    ci <- 0L
+                    repl_marker <- function(s) {
+                        while (grepl(marker, s, fixed = TRUE) && ci < length(captions)) {
+                            ci <<- ci + 1L
+                            s <- sub(marker, paste0("[Image description: ", captions[ci], "]"),
+                                     s, fixed = TRUE)
+                        }
+                        s
+                    }
+                    messages <- lapply(messages, function(mm) {
+                        if (!is.null(mm$content)) mm$content <- repl_marker(mm$content)
+                        mm
+                    })
+                }
+
+                # From here the request is text-only (image markers are now
+                # "[Image description: ...]" text), answered by the text model.
                 built <<- llama_chat_build(model, messages, tools = tools,
                                            tool_choice = tool_choice,
                                            enable_thinking = enable_thinking)
@@ -512,6 +686,9 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
                 }
                 req_max <<- min(req_max, avail)
 
+                # Always the text model now: any image was turned into an
+                # "[Image description: ...]" text block by the VL caption step
+                # above, so generation is a normal text turn (tools/grammar incl.).
                 gen_args <- list(
                     ctx, built$prompt, max_new_tokens = req_max,
                     temp = as.double(body$temperature %||% 0.7),

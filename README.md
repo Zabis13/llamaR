@@ -296,6 +296,31 @@ at `inst/examples/serve_anthropic_test.sh`:
 bash inst/examples/serve_anthropic_test.sh model.gguf 11435
 ```
 
+#### Vision (images) with a second model
+
+Give the server a vision model and its projector to handle images that Claude
+Code sends (e.g. screenshots). The server then runs a *caption-then-reason*
+pipeline: the vision model (e.g. Qwen2-VL) describes each image — focused on the
+user's question — and that description is handed to the main text model, which
+reasons over it and answers as usual (with tools and streaming). The user sees
+only the text model's reply; set `vision_debug = TRUE` to log captions.
+
+```r
+llama_serve_anthropic(
+  "Qwen3.5-9B-UD-Q6_K_XL.gguf", port = 11435L,
+  vision_model_path = "Qwen2-VL-2B-Instruct-Q8_0.gguf",
+  mmproj_path       = "mmproj-Qwen2-VL-2B-Instruct-Q8_0.gguf",
+  vision_n_ctx      = 8192L)        # small vision context keeps both in VRAM
+```
+
+Both models stay loaded; image requests use the vision model for the caption,
+everything else stays on the text model. Without `vision_model_path` the server
+is text-only and image blocks are dropped (unchanged behaviour). The launcher
+`inst/examples/claude_code_launcher.sh` enables this by default via the
+`VISION_MODEL` / `MMPROJ` environment variables, and
+`inst/examples/serve_anthropic_vision.R` shows the raw request format plus a
+`--selftest` that sends a base64 image over curl (no Claude Code needed).
+
 ### Chatting via ellmer
 
 `chat_llamar()` returns an [ellmer](https://ellmer.tidyverse.org/) `Chat`

@@ -190,3 +190,57 @@ test_that(".anthropic_tools_to_openai returns NULL for no tools", {
     expect_null(llamaR:::.anthropic_tools_to_openai(NULL))
     expect_null(llamaR:::.anthropic_tools_to_openai(list()))
 })
+
+# --- vision: image-block parsing (no model needed) ----------------------------
+
+# A tiny but valid 1x1 PNG, base64-encoded. Lets us exercise the base64 decode +
+# temp-file write path without a graphics device. (8-byte sig + IHDR + IDAT + IEND.)
+.tiny_png_b64 <- paste0(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk",
+    "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+
+test_that(".anthropic_image_to_file decodes an inline base64 image to a file", {
+    b <- list(type = "image",
+              source = list(type = "base64", media_type = "image/png",
+                            data = .tiny_png_b64))
+    p <- llamaR:::.anthropic_image_to_file(b)
+    on.exit(unlink(p), add = TRUE)
+    expect_true(file.exists(p))
+    expect_gt(file.info(p)$size, 0)
+    expect_match(p, "\\.png$")
+    # round-trips: decoded bytes == original payload
+    expect_identical(readBin(p, "raw", file.info(p)$size),
+                     jsonlite::base64_dec(.tiny_png_b64))
+})
+
+test_that(".anthropic_image_to_file returns NULL for non-base64 / empty sources", {
+    expect_null(llamaR:::.anthropic_image_to_file(
+        list(type = "image", source = list(type = "url", url = "http://x/y.png"))))
+    expect_null(llamaR:::.anthropic_image_to_file(
+        list(type = "image", source = list(type = "base64", data = ""))))
+    expect_null(llamaR:::.anthropic_image_to_file(list(type = "image")))
+})
+
+test_that(".anthropic_to_messages splices the marker and collects paths (vision on)", {
+    body <- list(messages = list(list(role = "user", content = list(
+        list(type = "text", text = "What is this? "),
+        list(type = "image", source = list(type = "base64",
+             media_type = "image/png", data = .tiny_png_b64))))))
+    msgs <- llamaR:::.anthropic_to_messages(body, marker = "<__media__>")
+    paths <- attr(msgs, "image_paths")
+    on.exit(unlink(paths), add = TRUE)
+    # marker spliced into the user text where the image was
+    expect_true(grepl("<__media__>", msgs[[length(msgs)]]$content, fixed = TRUE))
+    expect_length(paths, 1L)
+    expect_true(file.exists(paths))
+})
+
+test_that(".anthropic_to_messages drops image blocks when vision is off (no marker)", {
+    body <- list(messages = list(list(role = "user", content = list(
+        list(type = "text", text = "What is this? "),
+        list(type = "image", source = list(type = "base64",
+             media_type = "image/png", data = .tiny_png_b64))))))
+    msgs <- llamaR:::.anthropic_to_messages(body)   # marker = NULL -> text-only
+    expect_false(grepl("__media__", msgs[[length(msgs)]]$content))
+    expect_null(attr(msgs, "image_paths"))
+})

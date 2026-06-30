@@ -64,3 +64,15 @@ test_that("llama_hf_cache_clear handles empty cache", {
     "empty"
   )
 })
+
+test_that("llama_hf_list validates repo_id shape before any network call", {
+  # stopifnot(grepl("/", repo_id)) fires before .hf_api_get, so no network.
+  expect_error(llama_hf_list("no-slash"))
+  expect_error(llama_hf_list(c("a/b", "c/d")))   # length-1 required
+})
+
+test_that("llama_load_model_hf rejects a bad repo_id without downloading", {
+  # delegates to llama_hf_download(), which requires exactly one selector;
+  # passing none errors before touching the network.
+  expect_error(llama_load_model_hf("org/repo"), "Specify exactly one")
+})

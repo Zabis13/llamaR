@@ -515,6 +515,45 @@ llama_gen_begin <- function(ctx, prompt, max_new_tokens = 256L,
           if (is.null(trigger_tokens)) NULL else as.integer(trigger_tokens))
 }
 
+#' Begin streaming generation from an already-prefilled context
+#'
+#' Like [llama_gen_begin], but does \strong{not} tokenize a prompt or clear the
+#' KV cache. Use it to continue generation after [llama_image_eval] (or any
+#' other code that has already decoded tokens into the context), so the
+#' multimodal prefill is preserved. Sampling continues from the context's last
+#' logits; pull tokens with [llama_gen_next] and flush with [llama_gen_end] as
+#' usual.
+#'
+#' @param ctx A llama context whose KV cache has already been populated (e.g. by
+#'   [llama_image_eval]).
+#' @param n_past Starting KV position, as returned by [llama_image_eval]. Kept
+#'   for clarity/symmetry; the context already tracks its own position.
+#' @inheritParams llama_gen_begin
+#' @return An external pointer holding the generation state (see
+#'   [llama_gen_begin]).
+#' @seealso [llama_image_eval], [llama_gen_next], [llama_gen_end]
+#' @export
+llama_gen_begin_at <- function(ctx, n_past, max_new_tokens = 256L,
+                               temp = 0.8, top_k = 50L, top_p = 0.9, seed = 42L,
+                               min_p = 0.0, typical_p = 1.0,
+                               repeat_penalty = 1.0, repeat_last_n = 64L,
+                               frequency_penalty = 0.0, presence_penalty = 0.0,
+                               mirostat = 0L, mirostat_tau = 5.0, mirostat_eta = 0.1,
+                               grammar = NULL,
+                               trigger_patterns = NULL, trigger_tokens = NULL) {
+    stopifnot(inherits(ctx, "externalptr"))
+    .Call("r_llama_gen_begin_at", ctx, as.integer(n_past),
+          as.integer(max_new_tokens), as.double(temp),
+          as.integer(top_k), as.double(top_p), as.integer(seed),
+          as.double(min_p), as.double(typical_p),
+          as.double(repeat_penalty), as.integer(repeat_last_n),
+          as.double(frequency_penalty), as.double(presence_penalty),
+          as.integer(mirostat), as.double(mirostat_tau), as.double(mirostat_eta),
+          grammar,
+          if (is.null(trigger_patterns)) NULL else as.character(trigger_patterns),
+          if (is.null(trigger_tokens)) NULL else as.integer(trigger_tokens))
+}
+
 #' Pull the next chunk of a streaming generation
 #'
 #' Advances a generation started with [llama_gen_begin] by one token and

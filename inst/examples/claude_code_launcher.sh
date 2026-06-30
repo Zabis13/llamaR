@@ -7,10 +7,15 @@
 # then runs `claude` with ANTHROPIC_BASE_URL/ANTHROPIC_API_KEY pointed at it.
 # When claude exits (or you Ctrl-C), the server is stopped automatically.
 #
+# By default this loads BOTH models so one Claude Code session handles text and
+# images: Qwen3.5-9B for chat/tools, Qwen2-VL-2B (+mmproj) for screenshots. The
+# server routes each request to the right model (image -> Qwen2-VL, else Qwen3.5)
+# and serializes them through one queue. Override any path via the env vars below.
+#
 # Examples:
-#   bash claude_code_launcher.sh                          # default Qwen model
-#   bash claude_code_launcher.sh /models/Qwen3-14B.gguf 11435
-#   bash claude_code_launcher.sh /models/m.gguf 11435 -- --version
+#   bash claude_code_launcher.sh                  # text (Qwen3.5) + vision (Qwen2-VL)
+#   VISION_MODEL= MMPROJ= bash claude_code_launcher.sh   # text-only (no vision)
+#   bash claude_code_launcher.sh /models/other.gguf 11435  # different text model
 
 set -u
 
@@ -21,6 +26,21 @@ PORT="11435"
 # past 50k tokens. A 32k window then can't fit the prompt and the request fails.
 # Default to a large window; override with N_CTX=... if VRAM is tight.
 N_CTX="${N_CTX:-65536}"
+# Vision (optional second model): VISION_MODEL is a vision-capable GGUF and
+# MMPROJ its paired clip projector. When both are set, image requests route to
+# this model; everything else stays on MODEL. Set both empty for a text-only
+# server. VISION_N_CTX keeps the vision KV cache small so both fit in VRAM.
+VISION_MODEL="${VISION_MODEL:-/mnt/Data2/DS_projects/llm_models/Qwen2-VL-2B-Instruct-Q8_0.gguf}"
+MMPROJ="${MMPROJ:-/mnt/Data2/DS_projects/llm_models/mmproj-Qwen2-VL-2B-Instruct-Q8_0.gguf}"
+VISION_N_CTX="${VISION_N_CTX:-8192}"
+# Web search/fetch: register the bundled stdio MCP server (mcp_web_search.R) so
+# the local model can search the web and read pages. The search runs in that R
+# process on this machine (DuckDuckGo, no API key) — nothing hits the network on
+# the LLM server side. Set WEB_SEARCH=0 to disable. WEB_SEARCH_SCRIPT overrides
+# the path (defaults to the copy next to this launcher).
+WEB_SEARCH="${WEB_SEARCH:-1}"
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+WEB_SEARCH_SCRIPT="${WEB_SEARCH_SCRIPT:-$SELF_DIR/mcp_web_search.R}"
 CLAUDE_ARGS=()
 [ "${1:-}" != "" ] && [ "${1:-}" != "--" ] && { MODEL="$1"; shift; }
 [ "${1:-}" != "" ] && [ "${1:-}" != "--" ] && { PORT="$1"; shift; }
@@ -67,7 +87,16 @@ echo "   port:  $PORT   n_ctx: $N_CTX   log: $LOG"
 # Run the server in its own process group (setsid) so we can signal the whole
 # group on cleanup. Rscript forks an inner `exec/R` that actually listens; killing
 # only the Rscript wrapper would orphan it, so we target the group instead.
-setsid Rscript -e "llamaR::llama_serve_anthropic('$MODEL', port=${PORT}L, n_ctx=${N_CTX}L)" >"$LOG" 2>&1 &
+VISION_ARG=""
+if [ -n "$VISION_MODEL" ] && [ -n "$MMPROJ" ]; then
+  if [ -f "$VISION_MODEL" ] && [ -f "$MMPROJ" ]; then
+    VISION_ARG=", vision_model_path='$VISION_MODEL', mmproj_path='$MMPROJ', vision_n_ctx=${VISION_N_CTX}L"
+    echo "   vision: $(basename "$VISION_MODEL") (+$(basename "$MMPROJ"), n_ctx=$VISION_N_CTX)"
+  else
+    echo "   vision: SKIPPED (model or mmproj file missing)" >&2
+  fi
+fi
+setsid Rscript -e "llamaR::llama_serve_anthropic('$MODEL', port=${PORT}L, n_ctx=${N_CTX}L${VISION_ARG})" >"$LOG" 2>&1 &
 SRV_PID=$!
 
 cleanup() {
@@ -122,9 +151,24 @@ echo
 #    requesting "opus").
 #  * --settings with inline JSON overrides ~/.claude/settings.json's
 #    "model": "opus" without touching the user's global settings.
+#  * --mcp-config with inline JSON registers the web-search MCP server for THIS
+#    session only (no `claude mcp add`, no change to the user's MCP config);
+#    --strict-mcp-config makes Claude Code use ONLY this server, ignoring any
+#    globally-configured MCP servers so the session stays self-contained.
+MCP_ARGS=()
+if [ "$WEB_SEARCH" = "1" ]; then
+  if [ -f "$WEB_SEARCH_SCRIPT" ]; then
+    echo "   web search: ON ($(basename "$WEB_SEARCH_SCRIPT") via Rscript)"
+    MCP_JSON="{\"mcpServers\":{\"web-search\":{\"command\":\"Rscript\",\"args\":[\"$WEB_SEARCH_SCRIPT\"]}}}"
+    MCP_ARGS=(--mcp-config "$MCP_JSON" --strict-mcp-config)
+  else
+    echo "   web search: SKIPPED (script not found: $WEB_SEARCH_SCRIPT)" >&2
+  fi
+fi
 env -u ANTHROPIC_API_KEY \
     ANTHROPIC_BASE_URL="$BASE" \
     ANTHROPIC_AUTH_TOKEN="sk-local" \
   claude --model "$MODEL_ID" \
          --settings "{\"model\":\"$MODEL_ID\"}" \
+         "${MCP_ARGS[@]}" \
          "${CLAUDE_ARGS[@]}"

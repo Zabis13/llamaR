@@ -38,6 +38,14 @@ static FILE *const r_llama_dummy_stream_ = (FILE*)(void*)(intptr_t)1;
 #undef printf
 #define printf(...) Rprintf(__VA_ARGS__)
 
+// Wrapper for fflush: flushing our sentinel stream (stdout/stderr redirected to
+// (FILE*)1) would call libc fflush on a bogus pointer -> SIGSEGV. The R console
+// is flushed by REprintf/Rprintf already, so make it a no-op for the sentinel.
+// NB: this is required for code that flushes stdout/stderr from a background
+// thread (e.g. common_log's worker in log.cpp), where the crash is asynchronous.
+#define fflush(stream) \
+    ((stream == r_llama_dummy_stream_) ? 0 : fflush(stream))
+
 // Override exit/_Exit to prevent process termination (CRAN requirement)
 static inline void r_llama_exit(int status) {
     Rf_error("llama: exit called with status %d", status);

@@ -880,6 +880,88 @@ extern "C" SEXP r_llama_gen_begin(SEXP r_ctx, SEXP r_prompt,
     return ptr;
 }
 
+// Begin generation from an ALREADY-PREFILLED context, without clearing the KV
+// cache or tokenizing/decoding a prompt. Used after r_mtmd_eval has decoded
+// text+image chunks into the context (logits_last=true leaves logits ready for
+// the last position): we just build the sampler chain and hand back a gen_state
+// so the usual r_llama_gen_next loop can continue from where the image left off.
+// n_past is accepted for API symmetry; the context already tracks its own KV
+// position, and r_llama_gen_next samples from the last logits (index -1).
+extern "C" SEXP r_llama_gen_begin_at(SEXP r_ctx, SEXP r_n_past,
+                                     SEXP r_max_new_tokens, SEXP r_temp,
+                                     SEXP r_top_k, SEXP r_top_p, SEXP r_seed,
+                                     SEXP r_min_p, SEXP r_typical_p,
+                                     SEXP r_repeat_penalty, SEXP r_repeat_last_n,
+                                     SEXP r_frequency_penalty, SEXP r_presence_penalty,
+                                     SEXP r_mirostat, SEXP r_mirostat_tau,
+                                     SEXP r_mirostat_eta, SEXP r_grammar,
+                                     SEXP r_trigger_patterns, SEXP r_trigger_tokens) {
+    (void) r_n_past;
+    llama_context * ctx = (llama_context *) R_ExternalPtrAddr(r_ctx);
+    if (!ctx) Rf_error("llamaR: invalid context pointer");
+
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    int          max_new_tokens = INTEGER(r_max_new_tokens)[0];
+    float        temp           = (float) REAL(r_temp)[0];
+    int          top_k          = INTEGER(r_top_k)[0];
+    float        top_p          = (float) REAL(r_top_p)[0];
+    uint32_t     seed           = (uint32_t) INTEGER(r_seed)[0];
+    float        min_p          = (float) REAL(r_min_p)[0];
+    float        typical_p      = (float) REAL(r_typical_p)[0];
+    float        repeat_penalty = (float) REAL(r_repeat_penalty)[0];
+    int          repeat_last_n  = INTEGER(r_repeat_last_n)[0];
+    float        freq_penalty   = (float) REAL(r_frequency_penalty)[0];
+    float        pres_penalty   = (float) REAL(r_presence_penalty)[0];
+    int          mirostat       = INTEGER(r_mirostat)[0];
+    float        mirostat_tau   = (float) REAL(r_mirostat_tau)[0];
+    float        mirostat_eta   = (float) REAL(r_mirostat_eta)[0];
+    const char * grammar        = Rf_isNull(r_grammar) ? NULL : CHAR(STRING_ELT(r_grammar, 0));
+
+    // --- build sampler chain (identical to r_llama_gen_begin) ---
+    auto sparams = llama_sampler_chain_default_params();
+    llama_sampler * smpl = llama_sampler_chain_init(sparams);
+
+    llamar_add_grammar_sampler(smpl, vocab, grammar, r_trigger_patterns, r_trigger_tokens);
+
+    if (repeat_penalty != 1.0f || freq_penalty != 0.0f || pres_penalty != 0.0f) {
+        llama_sampler_chain_add(smpl,
+            llama_sampler_init_penalties(repeat_last_n, repeat_penalty, freq_penalty, pres_penalty));
+    }
+    if (mirostat == 0) {
+        if (top_k > 0)     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k));
+        if (min_p > 0.0f)  llama_sampler_chain_add(smpl, llama_sampler_init_min_p(min_p, 1));
+        if (typical_p < 1.0f) llama_sampler_chain_add(smpl, llama_sampler_init_typical(typical_p, 1));
+        if (top_p < 1.0f)  llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p, 1));
+        if (temp > 0.0f)   llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp));
+        if (temp > 0.0f)   llama_sampler_chain_add(smpl, llama_sampler_init_dist(seed));
+        else               llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+    } else if (mirostat == 1) {
+        int n_vocab_size = llama_vocab_n_tokens(vocab);
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp > 0.0f ? temp : 0.8f));
+        llama_sampler_chain_add(smpl, llama_sampler_init_mirostat(n_vocab_size, seed, mirostat_tau, mirostat_eta, 100));
+    } else if (mirostat == 2) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp > 0.0f ? temp : 0.8f));
+        llama_sampler_chain_add(smpl, llama_sampler_init_mirostat_v2(seed, mirostat_tau, mirostat_eta));
+    }
+
+    // NB: deliberately NO llama_memory_clear / prefill here — the caller
+    // (r_mtmd_eval) has already decoded the prompt + image into the KV cache.
+
+    llama_gen_state * st = new llama_gen_state();
+    st->ctx         = ctx;
+    st->vocab       = vocab;
+    st->smpl        = smpl;
+    st->n_remaining = max_new_tokens;
+    st->done        = false;
+
+    SEXP ptr = PROTECT(R_MakeExternalPtr(st, Rf_install("llama_gen_state"), R_NilValue));
+    R_RegisterCFinalizerEx(ptr, gen_state_finalizer, TRUE);
+    UNPROTECT(1);
+    return ptr;
+}
+
 // One generation step. Returns a length-1 character vector with the next
 // chunk of text (possibly ""), or NULL when generation is finished (EOG
 // reached or token budget exhausted). Holds back an incomplete trailing
@@ -2398,6 +2480,7 @@ static const R_CallMethodDef CallEntries[] = {
     // Generate
     {"r_llama_generate",              (DL_FUNC) &r_llama_generate,              20},
     {"r_llama_gen_begin",             (DL_FUNC) &r_llama_gen_begin,             19},
+    {"r_llama_gen_begin_at",          (DL_FUNC) &r_llama_gen_begin_at,          19},
     {"r_llama_gen_next",              (DL_FUNC) &r_llama_gen_next,              1},
     {"r_llama_gen_end",               (DL_FUNC) &r_llama_gen_end,               1},
     {"r_llama_generate_batch",        (DL_FUNC) &r_llama_generate_batch,        14},

@@ -14,6 +14,10 @@ llama_serve_anthropic(
   max_tokens = 1024L,
   strip_thinking = TRUE,
   enable_thinking = FALSE,
+  vision_model_path = NULL,
+  mmproj_path = NULL,
+  vision_n_ctx = 8192L,
+  vision_debug = FALSE,
   ...
 )
 }
@@ -51,6 +55,27 @@ never reach the answer, which \code{strip_thinking} then turns into an empty
 reply. Kept \code{FALSE} so Claude Code gets direct answers and fast tool
 calls; set \code{TRUE} only if you also raise \code{max_tokens} enough for
 the model to finish reasoning. No effect on non-thinking models.}
+
+\item{vision_model_path}{Optional path to a SECOND, vision-capable GGUF model
+(e.g. Qwen2-VL). When given together with \code{mmproj_path}, the server
+uses a \emph{caption-then-reason} pipeline: a request carrying an image is
+first passed to this vision model, which DESCRIBES the image (focused on the
+user's question); that description is then spliced into the conversation as
+text and answered by the main \code{model_path} model — so the stronger text
+model does the reasoning, tool calls, and streaming, while the vision model
+only provides "eyes". \code{NULL} (default) keeps the server text-only and
+image blocks are dropped, as before.}
+
+\item{mmproj_path}{Path to the clip projector (mmproj) GGUF paired with
+\code{vision_model_path}. Required to enable vision; must match that model.}
+
+\item{vision_n_ctx}{Context size for the vision model's own context
+(default \code{8192}). Vision turns (screenshot + question) are short, so a
+small KV cache keeps both models within VRAM.}
+
+\item{vision_debug}{If \code{TRUE}, log each vision caption to the server
+console (not returned to the client). Default \code{FALSE}: the caption is
+internal, the user sees only the text model's final answer.}
 
 \item{...}{Reserved for future options.}
 }
