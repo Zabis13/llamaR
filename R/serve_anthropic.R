@@ -117,8 +117,8 @@
     } else NULL
     # Collect ALL system text into a single leading system message. Chat templates
     # (DeepSeek, Qwen, ...) expect exactly one system turn at the start; emitting a
-    # second one — e.g. Claude Code sends a top-level `system` *and* a system role
-    # inside `messages` — makes the template drop one of them (silent content
+    # second one - e.g. Claude Code sends a top-level `system` *and* a system role
+    # inside `messages` - makes the template drop one of them (silent content
     # loss). So we merge the top-level `system` and any system-role messages, in
     # order, and keep only non-system turns in the message list.
     sys_parts <- character(0)
@@ -162,7 +162,7 @@
 # caption-then-reason: run ONE image through the vision model to produce a
 # textual observation, which the (stronger) text model then reasons over. The
 # vision model is asked to DESCRIBE what's relevant to the user's question, not
-# to answer it — the answer is the text model's job. Returns the caption string.
+# to answer it - the answer is the text model's job. Returns the caption string.
 #
 #   vl_model/vl_ctx/mctx : the vision pool member (model + its ctx + projector)
 #   image_path           : a decoded image file
@@ -180,7 +180,7 @@
     built <- llama_chat_build(vl_model, prompt_msgs, enable_thinking = FALSE)
     if (!grepl(marker, built$prompt, fixed = TRUE)) {
         stop("vision: media marker did not survive the vision model's chat ",
-             "template — the vision model likely lacks a vision slot.")
+             "template - the vision model likely lacks a vision slot.")
     }
     llama_memory_clear(vl_ctx)
     bitmap <- llama_image_load(mctx, image_path)
@@ -219,7 +219,7 @@
 #   * complete <think>...</think> pairs,
 #   * a dangling closing "...</think>" (template injected the opening tag),
 #   * an unclosed trailing "<think>..." (reasoning still streaming, not yet
-#     finished) — everything from the opener on is held back.
+#     finished) - everything from the opener on is held back.
 # Trims leftover leading whitespace. Returns the cleaned text.
 .strip_thinking <- function(txt) {
     if (!nzchar(txt)) return(txt)
@@ -321,7 +321,7 @@
 #'   uses a \emph{caption-then-reason} pipeline: a request carrying an image is
 #'   first passed to this vision model, which DESCRIBES the image (focused on the
 #'   user's question); that description is then spliced into the conversation as
-#'   text and answered by the main \code{model_path} model — so the stronger text
+#'   text and answered by the main \code{model_path} model - so the stronger text
 #'   model does the reasoning, tool calls, and streaming, while the vision model
 #'   only provides "eyes". \code{NULL} (default) keeps the server text-only and
 #'   image blocks are dropped, as before.
@@ -386,7 +386,7 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
     # live in VRAM at once, so the vision context is kept small (vision_n_ctx):
     # screenshot + question turns are short and don't need a large KV cache.
     # When vision_model_path is NULL the server behaves exactly as before
-    # (text-only, image blocks dropped) — backward compatible.
+    # (text-only, image blocks dropped) - backward compatible.
     vl_model <- NULL; vl_ctx <- NULL; vl_ctx_size <- 0L; mctx <- NULL
     if (vision_on) {
         vl_model <- llama_load_model(vision_model_path, n_gpu_layers = as.integer(n_gpu_layers),
@@ -404,16 +404,16 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
     # fires the main turn and a session-title turn at once) calling gen_begin ->
     # llama_memory_clear + prefill on top of an in-flight request corrupts both
     # (garbled, swallowed tokens). Rather than reject overlap with 503 and make
-    # the client retry, we SERIALIZE: every request — streaming or blocking — is
+    # the client retry, we SERIALIZE: every request - streaming or blocking - is
     # answered through dr_stream (drogonR's only deferred-response mechanism), so
     # its next_chunk pumps across event-loop ticks. Each request takes a FIFO
     # ticket; a request starts generating only when the ctx is free AND its ticket
     # is at the head of the queue. Until then it emits keep-alives and yields.
     #
     # State lives in the handler closure (single R thread, so no locking needed):
-    #   ctx_busy     — TRUE while a request holds the ctx and is generating.
-    #   q_next       — monotonic ticket counter (next ticket to hand out).
-    #   q_head       — ticket currently allowed to acquire (head of the FIFO).
+    #   ctx_busy     - TRUE while a request holds the ctx and is generating.
+    #   q_next       - monotonic ticket counter (next ticket to hand out).
+    #   q_head       - ticket currently allowed to acquire (head of the FIFO).
     # A request with ticket T may acquire when !ctx_busy && T == q_head. On
     # release it sets ctx_busy<-FALSE and bumps q_head so the next waiter runs.
     # Tickets that give up (client disconnect before acquiring) are skipped by
@@ -457,7 +457,7 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
 
         # Take a FIFO ticket. The request only touches the ctx (chat_build,
         # tokenize, gen_begin) once it reaches the head of the queue AND the ctx is
-        # free — see the `acquire` phase in next_chunk below. Everything up to here
+        # free - see the `acquire` phase in next_chunk below. Everything up to here
         # is ctx-free, so it's safe to run on the request thread immediately.
         ticket <- q_next
         q_next   <<- q_next + 1L
@@ -494,7 +494,7 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
             # content blocks as "empty or malformed response". A thinking model
             # can also spend its whole budget inside an unclosed <think> and
             # never reach the answer; stripping then leaves nothing. Fall back to
-            # a single (possibly raw) text block — reasoning beats silence.
+            # a single (possibly raw) text block - reasoning beats silence.
             if (length(blocks) == 0) {
                 fb <- if (nzchar(parsed$content %||% "")) parsed$content else " "
                 blocks <- list(list(type = "text", text = fb))
@@ -584,7 +584,7 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
 
                 # output_config.effort (low|medium|high): Claude Code's reasoning-
                 # effort hint. Local GGUF models have no native effort control, so
-                # map it onto the generation budget — higher effort allows more
+                # map it onto the generation budget - higher effort allows more
                 # tokens (longer chain-of-thought) before truncation.
                 effort <- body$output_config$effort %||% NULL
                 if (!is.null(effort)) {
@@ -712,7 +712,7 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
 
             if (state$phase == "start") {
                 state$phase <- "text"
-                # Blocking requests emit no intermediate frames — skip straight to
+                # Blocking requests emit no intermediate frames - skip straight to
                 # generating. Only streaming clients get the message_start event.
                 if (!stream) return(list(chunk = "", state = s, done = FALSE))
                 obj <- list(type = "message_start", message = list(
@@ -732,8 +732,8 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
                     state$n <- state$n + 1L
                     state$text <- c(state$text, chunk)
 
-                    # Blocking requests — and streaming GENERIC requests, whose raw
-                    # JSON wrapper can't be streamed live — emit nothing here; just
+                    # Blocking requests - and streaming GENERIC requests, whose raw
+                    # JSON wrapper can't be streamed live - emit nothing here; just
                     # accumulate and pump again. The full reply is parsed and sent
                     # at finalize (one JSON chunk for blocking; SSE events for stream).
                     if (!stream || defer_stream) return(list(chunk = "", state = s, done = FALSE))
@@ -797,7 +797,7 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
                 parsed <- llama_chat_parse(raw, format = built$format, parser = built$parser)
                 hit_limit <- state$n >= req_max
                 frames <- character(0)
-                # Deferred (GENERIC) text wasn't streamed live — emit the parsed
+                # Deferred (GENERIC) text wasn't streamed live - emit the parsed
                 # content now as a whole text block (start+delta+stop). This is the
                 # path that unwraps {"response": "..."} into clean text.
                 txt <- if (isTRUE(strip_thinking)) .strip_thinking(parsed$content %||% "")
@@ -890,7 +890,7 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
           })
         }
 
-        # Every request — streaming or blocking — is answered through dr_stream so
+        # Every request - streaming or blocking - is answered through dr_stream so
         # it serializes on the single ctx via the FIFO queue (next_chunk pumps
         # across event-loop ticks; the ctx is acquired only at the head of the
         # queue). Streaming clients get SSE; blocking clients get a single JSON
