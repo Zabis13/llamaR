@@ -9,6 +9,19 @@
 #include <R.h>
 #include <R_ext/Print.h>
 
+// Pull in the C++ standard headers that call std::fflush / std::fprintf
+// internally (libc++'s <fstream> flushes via std::fflush in basic_filebuf::sync)
+// BEFORE our function-like macros below are defined. Once included here, their
+// include guards make the .cpp's own #include a no-op, so the macros never
+// rewrite the std:: qualified calls inside them (which would produce
+// "std::((stream == ...) ? 0 : fflush(...))" -> a syntax error on macOS/libc++).
+#ifdef __cplusplus
+#include <cstdio>
+#include <fstream>
+#include <ostream>
+#include <iostream>
+#endif
+
 // Override stderr/stdout to prevent direct usage
 // R CMD check flags these as non-portable
 #ifdef stderr

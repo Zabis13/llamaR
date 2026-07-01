@@ -15623,6 +15623,19 @@ NLOHMANN_JSON_NAMESPACE_BEGIN
 namespace detail
 {
 
+// llamaR patch: map unsigned char -> char for the default string adapter type so
+// that std::basic_string<unsigned char> (with the non-standard, deprecated
+// char_traits<unsigned char>) is never instantiated in this build. The binary
+// serialization APIs (to_cbor/to_msgpack/... into a std::string) are unused here;
+// this only changes the default StringType of output_string_adapter/output_adapter.
+// Keep in sync when upgrading nlohmann/json.
+template<typename CharType>
+struct json_output_string_char { using type = CharType; };
+template<>
+struct json_output_string_char<unsigned char> { using type = char; };
+template<typename CharType>
+using json_output_string_char_t = typename json_output_string_char<CharType>::type;
+
 /// abstract output adapter interface
 template<typename CharType> struct output_adapter_protocol
 {
@@ -15671,28 +15684,28 @@ template<typename CharType>
 class output_stream_adapter : public output_adapter_protocol<CharType>
 {
   public:
-    explicit output_stream_adapter(std::basic_ostream<CharType>& s) noexcept
+    explicit output_stream_adapter(std::basic_ostream<json_output_string_char_t<CharType>>& s) noexcept
         : stream(s)
     {}
 
     void write_character(CharType c) override
     {
-        stream.put(c);
+        stream.put(static_cast<json_output_string_char_t<CharType>>(c));
     }
 
     JSON_HEDLEY_NON_NULL(2)
     void write_characters(const CharType* s, std::size_t length) override
     {
-        stream.write(s, static_cast<std::streamsize>(length));
+        stream.write(reinterpret_cast<const json_output_string_char_t<CharType>*>(s), static_cast<std::streamsize>(length));
     }
 
   private:
-    std::basic_ostream<CharType>& stream;
+    std::basic_ostream<json_output_string_char_t<CharType>>& stream;
 };
 #endif  // JSON_NO_IO
 
 /// output adapter for basic_string
-template<typename CharType, typename StringType = std::basic_string<CharType>>
+template<typename CharType, typename StringType = std::basic_string<json_output_string_char_t<CharType>>>
 class output_string_adapter : public output_adapter_protocol<CharType>
 {
   public:
@@ -15715,7 +15728,7 @@ class output_string_adapter : public output_adapter_protocol<CharType>
     StringType& str;
 };
 
-template<typename CharType, typename StringType = std::basic_string<CharType>>
+template<typename CharType, typename StringType = std::basic_string<json_output_string_char_t<CharType>>>
 class output_adapter
 {
   public:
@@ -15724,7 +15737,7 @@ class output_adapter
         : oa(std::make_shared<output_vector_adapter<CharType, AllocatorType>>(vec)) {}
 
 #ifndef JSON_NO_IO
-    output_adapter(std::basic_ostream<CharType>& s)
+    output_adapter(std::basic_ostream<json_output_string_char_t<CharType>>& s)
         : oa(std::make_shared<output_stream_adapter<CharType>>(s)) {}
 #endif  // JSON_NO_IO
 

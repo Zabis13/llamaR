@@ -532,6 +532,14 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
         state$n        <- 0L
         state$text     <- character(0)
         state$acquired <- FALSE
+        # B2 incremental-parse streaming (tool formats): emitted = length of
+        # parsed$content already sent as text_delta; tool_frozen = TRUE once the
+        # partial parser first reveals a tool_call, after which text streaming
+        # stops and tool_use blocks are emitted whole at finalize; since_parse =
+        # tokens generated since the last incremental parse (throttle counter).
+        state$emitted     <- ""
+        state$tool_frozen <- FALSE
+        state$since_parse <- 0L
 
         # These are filled in at acquire time (they touch the ctx, so they must
         # not run until this request owns it).
@@ -638,19 +646,19 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
                                            tool_choice = tool_choice,
                                            enable_thinking = enable_thinking)
                 # Decide whether to defer the stream (generate silently, parse, then
-                # emit at finalize) instead of streaming raw token deltas live.
-                # Raw deltas are only safe when they ARE the final text. They are NOT
-                # when the model emits structured markup that only becomes valid
-                # content after llama_chat_parse:
-                #   * GENERIC (format id 1) wraps the whole reply in a JSON object
-                #     ({"response": "..."} / {"tool_call": ...}).
-                #   * Any tool-calling format (Hermes etc.) emits tool calls as
-                #     <tool_call>{json}</tool_call> markup; streaming it live leaks
-                #     the raw tags to the client and never yields a tool_use block.
-                # So defer whenever the request carries tools, or for GENERIC. Plain
-                # chat with no tools still streams live.
-                defer_stream <<- identical(as.integer(built$format), 1L) ||
-                                 (!is.null(tools) && length(tools) > 0)
+                # emit at finalize) instead of streaming text deltas live.
+                #   * GENERIC (format id 1) wraps the WHOLE reply in a JSON object
+                #     ({"response": "..."} / {"tool_call": ...}). No prefix of that
+                #     JSON is valid content, so it can never stream live - defer it.
+                # Tool-calling formats (Hermes/Qwen/Mistral) are NOT deferred: they
+                # begin as ordinary prose and only later emit <tool_call>{json}</...>
+                # markup. We stream the prose live by parsing the accumulated raw
+                # text incrementally (is_partial = TRUE) and emitting only the tail
+                # of parsed$content that hasn't been sent. Once the parser reveals a
+                # tool_call, we FREEZE the text stream (see phase == "text" below);
+                # the tool_use blocks are emitted whole at finalize. This keeps the
+                # markup from ever leaking to the client while still animating text.
+                defer_stream <<- identical(as.integer(built$format), 1L)
                 # triggers only for lazy grammars (see llama_chat_build)
                 tp <- if (isTRUE(built$grammar_lazy)) built$trigger_patterns else NULL
                 tt <- if (isTRUE(built$grammar_lazy)) built$trigger_tokens   else NULL
@@ -738,29 +746,48 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
                     # at finalize (one JSON chunk for blocking; SSE events for stream).
                     if (!stream || defer_stream) return(list(chunk = "", state = s, done = FALSE))
 
-                    # Determine the delta to actually stream. With strip_thinking
-                    # we can't pass <think> chunks through live (the closing tag
-                    # arrives later), so we recompute the cleaned text each step
-                    # and only emit the newly-revealed tail. While reasoning is
-                    # still open the cleaned text is empty, so nothing is sent
-                    # until </think> closes.
-                    if (isTRUE(strip_thinking)) {
-                        full_clean <- .strip_thinking(paste0(state$text, collapse = ""))
-                        already <- state$emitted %||% ""
-                        if (startsWith(full_clean, already) &&
-                            nchar(full_clean) > nchar(already)) {
-                            out_delta <- substr(full_clean, nchar(already) + 1L, nchar(full_clean))
-                            state$emitted <- full_clean
-                        } else {
-                            out_delta <- ""
-                        }
-                    } else {
-                        out_delta <- chunk
-                    }
+                    # Once the partial parser has revealed a tool_call, the rest of
+                    # the generation is tool markup: stop streaming text entirely.
+                    # Finalize emits the tool_use blocks whole.
+                    if (isTRUE(state$tool_frozen)) return(list(chunk = "", state = s, done = FALSE))
 
-                    if (!nzchar(out_delta)) {
+                    # B2 incremental streaming: derive what to stream from a partial
+                    # parse of the accumulated raw text, NOT from the raw token. This
+                    # is the single source of truth for every format - the parser
+                    # strips <think> reasoning and holds back tool markup, so only
+                    # genuine content ever reaches the client. Parsing every token
+                    # would re-scan a near-identical string each step, so we throttle:
+                    # parse immediately on a newline, on a space/punctuation boundary
+                    # once a few tokens have accrued, else force a parse every 8th
+                    # token. Between parses we accumulate silently.
+                    state$since_parse <- state$since_parse + 1L
+                    is_nl    <- grepl("\n", chunk, fixed = TRUE)
+                    is_break <- grepl("[[:space:][:punct:]]", chunk)
+                    do_parse <- is_nl ||
+                                (is_break && state$since_parse >= 2L) ||
+                                state$since_parse >= 8L
+                    if (!do_parse) return(list(chunk = "", state = s, done = FALSE))
+                    state$since_parse <- 0L
+
+                    raw <- paste0(state$text, collapse = "")
+                    parsed <- llama_chat_parse(raw, format = built$format,
+                                               is_partial = TRUE, parser = built$parser)
+                    # A tool_call surfacing means the tail is markup, not prose:
+                    # freeze now and let finalize emit the tool_use blocks.
+                    if (!is.null(parsed$tool_calls) && nrow(parsed$tool_calls) > 0) {
+                        state$tool_frozen <- TRUE
                         return(list(chunk = "", state = s, done = FALSE))
                     }
+                    full <- if (isTRUE(strip_thinking))
+                                .strip_thinking(parsed$content %||% "")
+                            else parsed$content %||% ""
+                    already <- state$emitted %||% ""
+                    if (!(startsWith(full, already) && nchar(full) > nchar(already))) {
+                        return(list(chunk = "", state = s, done = FALSE))
+                    }
+                    out_delta <- substr(full, nchar(already) + 1L, nchar(full))
+                    state$emitted <- full
+
                     # stream text deltas as a single text content block (index 0)
                     if (!isTRUE(state$block_open)) {
                         state$block_open <- TRUE
@@ -811,6 +838,21 @@ llama_serve_anthropic <- function(model_path, port = 11435L,
                         sse("content_block_delta", list(
                             type = "content_block_delta", index = 0L,
                             delta = list(type = "text_delta", text = txt))))
+                } else if (isTRUE(state$block_open)) {
+                    # B2 live-streamed the text incrementally against the PARTIAL
+                    # parse; the final (non-partial) parse gives the definitive
+                    # content. Flush whatever follows the emitted prefix so the
+                    # streamed block matches it exactly. This also recovers the last
+                    # prose tokens that arrived just before a tool_call froze the
+                    # stream (parsed$content holds the prose, minus the tool markup).
+                    already <- state$emitted %||% ""
+                    if (startsWith(txt, already) && nchar(txt) > nchar(already)) {
+                        tail <- substr(txt, nchar(already) + 1L, nchar(txt))
+                        state$emitted <- txt
+                        frames <- c(frames, sse("content_block_delta", list(
+                            type = "content_block_delta", index = 0L,
+                            delta = list(type = "text_delta", text = tail))))
+                    }
                 }
                 # close the streamed text block if one was opened
                 if (isTRUE(state$block_open)) {

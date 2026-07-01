@@ -69,7 +69,7 @@ the model to finish reasoning. No effect on non-thinking models.}
 uses a \emph{caption-then-reason} pipeline: a request carrying an image is
 first passed to this vision model, which DESCRIBES the image (focused on the
 user's question); that description is then spliced into the conversation as
-text and answered by the main \code{model_path} model — so the stronger text
+text and answered by the main \code{model_path} model - so the stronger text
 model does the reasoning, tool calls, and streaming, while the vision model
 only provides "eyes". \code{NULL} (default) keeps the server text-only and
 image blocks are dropped, as before.}
