@@ -16,3 +16,4 @@ src/*.o
 # Package build
 *.tar.gz
 *.Rcheck/
+TODO.md
