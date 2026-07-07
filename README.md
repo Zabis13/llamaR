@@ -49,6 +49,24 @@ Measured on AMD Ryzen 5 5600 + AMD RX 9070, model Ministral-3-3B-Instruct-2512-Q
 | CPU (8 threads) | 8.5 | 1.0x |
 | GPU (Vulkan) | 108.0 | 12.7x |
 
+### Multi-GPU: single-GPU vs split vs data-parallel
+
+`llama_load_model()` exposes llama.cpp's split strategies via `split_mode` (`"none"`, `"layer"`, `"row"`) and `devices`. Measured on **4× Tesla P100-SXM2-16GB** (Vulkan), Qwen2.5-1.5B-Instruct Q4_K_M, decode throughput, median of 3 runs of 128 tokens:
+
+| Strategy | GPUs | `split_mode` | Decode t/s | Notes |
+|---|---|---|---:|---|
+| Baseline | 1 | `none` | **419.7** | model fits in one card — fastest |
+| Pipeline (PP) | 2 | `layer` | 150.4 | layers spread across 2 GPUs |
+| Tensor (TP) | 2 | `row` | 150.4 | rows split, all-reduce per layer |
+| Pipeline (PP) | 4 | `layer` | 133.3 | more hops → slower |
+| Tensor (TP) | 4 | `row` | 130.0 | more hops → slower |
+| **TP=2 × DP=2** | 4 | `row` + 2 replicas | **306** | two `row`-split replicas on {0,1} and {2,3}, run concurrently |
+| **DP=4** | 4 | 4 replicas | **975** | four single-GPU replicas, run concurrently |
+
+Data parallelism (DP) means running **independent processes**, each with its own model/context on its own GPU(s); throughput is the sum of the concurrent replicas' t/s. Reproduce with `inst/examples/bench_pp_tp_dp.sh <model.gguf>`.
+
+**Rule of thumb:** if the model **fits in one GPU**, use single-GPU replicas (DP) for throughput — DP=4 here is ~2.3× a single card and far ahead of any split. Reach for `split_mode = "layer"`/`"row"` only when the model is **too large for one card** (e.g. a 30B+ model on 16 GB GPUs): a split is then the only way to load it. `"layer"` minimizes cross-device copies (one activation handoff per pass); `"row"` maximizes per-token parallelism but pays a per-layer all-reduce over the ~1 GB/s host-staging link.
+
 ## Installation
 
 ### Dependencies

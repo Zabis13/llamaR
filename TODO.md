@@ -634,6 +634,99 @@ API (без HTTP-хопа внутри процесса).
 прокидывание стрима из воркера во фронт без блокировки event loop фронта;
 graceful drain воркера при рестарте.
 
+### Continuous batching (vLLM-стиль, in-process) — план (сессия 2026-07-04)
+
+**Позиционирование.** ОРТОГОНАЛЬНО worker-pool выше: там пропускная способность
+растёт горизонтально (N процессов × 1 seq каждый), здесь — один процесс декодит
+N последовательностей в ОДНОМ forward (батчинг seq в общем decode-loop, как
+llama-server `-np N` / vLLM). Оба слоя совместимы: воркер-пул можно поставить
+поверх continuous-batching-воркеров позже. Это тот самый «не continuous batching»,
+про который сказано в roadmap выше — закрываем этот пробел.
+
+**Разведка (факты, код НЕ трогали):**
+- **Фундамент decode-loop УЖЕ есть.** `r_llama_generate_batch`
+  (`src/r_llama_interface.cpp:1037`) содержит настоящий многосессионный цикл
+  `while (n_active > 0)` (:1207): один `llama_decode` на N живых seq за шаг
+  (:1228), per-seq state (`active[]`/`seq_pos[]`/`generated[]`/`n_generated[]`/
+  `finished[]` + отдельный sampler на seq) — это уже слот-таблица. KV чистится
+  на лету per-seq: `llama_memory_seq_rm(mem, s, -1, -1)` при EOS/лимите
+  (:1253/:1266). ЕДИНСТВЕННОЕ ограничение: `n_seq` фиксируется ДО входа в
+  `while` — новые запросы внутрь не добавляются (static batching, не continuous),
+  результат возвращается разом в конце. Т.е. нужна ДОПИСКА событийности в
+  существующий цикл, а не новый scheduler.
+- **Серверный слой УЖЕ есть.** `R/serve.R` (`llama_serve_openai`) — сервер на
+  drogonR, но через `dr_stream_sse` + `dr_post` (HTTP+SSE, R-путь) и
+  single-sequence: каждый запрос — свой независимый generator, не общий батч.
+- **Транспорт (drogonR) ГОТОВ ПОЛНОСТЬЮ** (drogonR 0.1.8). Всё, что нужно
+  continuous batching'у, уже несёт ABI `drogonr_ws_handler_t`
+  (`drogonR/inst/include/drogonR.h`):
+    * session (= conn_id) переживает вызов хендлера; `send`/`close`/
+      `is_connected` thread-safe из detached decode-потока (документированная
+      гарантия) — decode-loop раздаёт токены N сессиям асинхронно.
+    * O(1)-контракт хендлера зафиксирован в ABI: хендлер только кладёт запрос в
+      нашу очередь и возвращается, генерация — на нашем потоке.
+    * `dr_ws_cpp(app, path, package, callable, max_conns, idle_timeout,
+      max_lifetime)` — грубый транспортный предохранитель: reject сверх лимита
+      (WS close 1013), reap зависших сессий. НЕ заменяет наш seq-лимит по VRAM.
+
+**Граница (что где живёт):**
+- drogonR — транспорт (готов, не трогаем): HTTP/WS/SSE, async-ABI, backpressure-
+  предохранитель. НЕ знает про seq_id / KV / VRAM.
+- llamaR — scheduler (эта работа): очередь, слот-таблица seq→session, decode-loop
+  событийный, seq-лимит по VRAM. ggmlR НЕ участвует (уровень тензоров, ниже).
+- PagedAttention/пейджинг KV — ВНУТРИ llama.cpp (`llama_memory` уже страничный);
+  с R-уровня мы только управляем seq_id-слотами, пейджингом занимается llama.cpp.
+
+**План (дописка событийности в существующий батч-декодер, не новый scheduler):**
+- [ ] **Шаг 1 — thread-safe очередь запросов** (пункт 2). Новый C++-модуль:
+      `std::deque<PendingGen>` (prompt + drogonr_ws_session handle + send_fn) под
+      mutex + condvar. cpp-WS-хендлер (drogonr_ws_handler_t) кладёт запрос и
+      сразу возвращается (O(1)-контракт ABI). Decode-поток парковается на condvar,
+      когда батч пуст.
+- [ ] **Шаг 2 — событийный decode-loop** (пункт 2/4). Взять `r_llama_generate_batch`
+      цикл (:1207) за основу, вынести в отдельный decode-поток (НЕ R-main), три
+      вставки: (а) в начало итерации — дренаж очереди: новым запросам выделить
+      свободный seq_id, prefill промпта, добавить в active[], n_active++;
+      (б) после sampling токена — вместо накопления в generated[s] сразу
+      `send(session[s], token)` в drogonR-сессию этого seq; (в) условие цикла
+      `while (n_active > 0 || server_running)` — не выходить на пустом батче,
+      парковаться на очереди. n_seq больше НЕ фиксирован.
+- [ ] **Шаг 3 — слот-таблица seq→session** (пункт 4). Расширить существующий
+      per-seq state полем `drogonr_ws_session* session` (+ n_prompt_tokens,
+      позиция). Свободные слоты = пул seq_id [0, n_parallel). При завершении seq
+      (EOS/лимит/disconnect) — seq_rm + close(session) + вернуть слот в пул.
+      Проверять `is_connected(session)` между decode-шагами (ABI: дёшев, для
+      этого и предназначен) — выкидывать disconnected seq из батча, не тратя
+      compute.
+- [ ] **Шаг 4 — seq-лимит по VRAM** (пункт 5, политика). `n_parallel` слотов =
+      функция от размера KV-cache / VRAM (llamaR знает, drogonR — нет). Запросы
+      сверх лимита ждут в очереди (не отклонять — очередь FIFO, как в serve_anthropic).
+      drogonR `max_conns` выставить >= n_parallel как грубый потолок соединений.
+- [ ] **Шаг 5 — `llama_serve_openai_ws()`** (пункт 4b). Новый серверный вход рядом
+      с `llama_serve_openai` (HTTP/SSE оставить как есть для single-seq клиентов):
+      регистрирует `dr_ws_cpp` на горячий путь (C++↔C++, минуя R-main), поднимает
+      decode-поток, отдаёт токены через WS. OpenAI/SSE-совместимость поверх WS-фрейма
+      (или отдельный WS-протокол — решить).
+- [ ] **Шаг 6 — тесты.** Юнит: очередь (enqueue/dequeue под нагрузкой), слот-пул
+      (выделение/возврат, исчерпание). E2e (heavy, нужна модель): N параллельных
+      WS-клиентов получают токены ОДНОВРЕМЕННО (не по очереди), disconnect одного
+      не роняет батч, seq-лимит держит N активных.
+
+**Риск №1:** decode-поток — не R-main; он НЕ смеет трогать SEXP (то же правило,
+что в drogonR-мосте). Всё R-взаимодействие (загрузка модели, конфиг) — до старта
+потока. Токены наружу идут через drogonR send() (C-путь), НЕ через R.
+**Риск №2:** динамический prefill новых seq в общий батч — проверить, что
+`llama_decode` корректно микширует prefill (много токенов одного seq) и decode
+(1 токен на seq) в одном вызове, либо разнести prefill/decode по разным шагам.
+**Риск №3:** объём работы — Шаги 1-3 это дописка в РАБОЧИЙ `r_llama_generate_batch`;
+беречь его синхронный путь (нужен для llama_generate_batch API) — не ломать, а
+добавить событийный вариант рядом (флаг/отдельная функция).
+
+**Источники:** `src/r_llama_interface.cpp:1037-1272` (батч-декодер),
+`R/serve.R` (серверный слой), `drogonR/inst/include/drogonR.h`
+(drogonr_ws_handler_t ABI), `drogonR/src/ws_session.cpp` (образец моста
+IO-тред↔очередь). Транспорт готов — работа целиком в llamaR.
+
 
 ### OpenAI-совместимый сервер (подключение OpenCode и др. агентов)
 
