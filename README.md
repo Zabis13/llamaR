@@ -51,17 +51,20 @@ Measured on AMD Ryzen 5 5600 + AMD RX 9070, model Ministral-3-3B-Instruct-2512-Q
 
 ### Multi-GPU: single-GPU vs split vs data-parallel
 
-`llama_load_model()` exposes llama.cpp's split strategies via `split_mode` (`"none"`, `"layer"`, `"row"`) and `devices`. Measured on **4× Tesla P100-SXM2-16GB** (Vulkan), Qwen2.5-1.5B-Instruct Q4_K_M, decode throughput, median of 3 runs of 128 tokens:
+`llama_load_model()` exposes llama.cpp's split strategies via `split_mode` (`"none"`, `"layer"`, `"row"`) and `devices`. Measured on two 4-GPU hosts (Vulkan), Qwen2.5-1.5B-Instruct Q4_K_M, decode throughput, median of 3 runs of 128 tokens:
 
-| Strategy | GPUs | `split_mode` | Decode t/s | Notes |
-|---|---|---|---:|---|
-| Baseline | 1 | `none` | **419.7** | model fits in one card — fastest |
-| Pipeline (PP) | 2 | `layer` | 150.4 | layers spread across 2 GPUs |
-| Tensor (TP) | 2 | `row` | 150.4 | rows split, all-reduce per layer |
-| Pipeline (PP) | 4 | `layer` | 133.3 | more hops → slower |
-| Tensor (TP) | 4 | `row` | 130.0 | more hops → slower |
-| **TP=2 × DP=2** | 4 | `row` + 2 replicas | **306** | two `row`-split replicas on {0,1} and {2,3}, run concurrently |
-| **DP=4** | 4 | 4 replicas | **975** | four single-GPU replicas, run concurrently |
+- **P100** — 4× Tesla P100-SXM2-16GB
+- **V100** — 4× Tesla V100-32GB, 2× Xeon E5-2698 v4, 256 GB RAM
+
+| Strategy | GPUs | `split_mode` | Decode t/s (P100) | Decode t/s (V100) | Notes |
+|---|---|---|---:|---:|---|
+| Baseline | 1 | `none` | **419.7** | **516.9** | model fits in one card — fastest |
+| Pipeline (PP) | 2 | `layer` | 150.4 | 221.5 | layers spread across 2 GPUs |
+| Tensor (TP) | 2 | `row` | 150.4 | 223.2 | rows split, all-reduce per layer |
+| Pipeline (PP) | 4 | `layer` | 133.3 | 176.3 | more hops → slower |
+| Tensor (TP) | 4 | `row` | 130.0 | 176.6 | more hops → slower |
+| **TP=2 × DP=2** | 4 | `row` + 2 replicas | **306** | **446** | two `row`-split replicas on {0,1} and {2,3}, run concurrently |
+| **DP=4** | 4 | 4 replicas | **975** | **1300** | four single-GPU replicas, run concurrently |
 
 Data parallelism (DP) means running **independent processes**, each with its own model/context on its own GPU(s); throughput is the sum of the concurrent replicas' t/s. Reproduce with `inst/examples/bench_pp_tp_dp.sh <model.gguf>`.
 
