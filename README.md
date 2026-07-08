@@ -66,6 +66,20 @@ Measured on AMD Ryzen 5 5600 + AMD RX 9070, model Ministral-3-3B-Instruct-2512-Q
 | **TP=2 × DP=2** | 4 | `row` + 2 replicas | **306** | **446** | two `row`-split replicas on {0,1} and {2,3}, run concurrently |
 | **DP=4** | 4 | 4 replicas | **975** | **1300** | four single-GPU replicas, run concurrently |
 
+Same model on an **8× Tesla V100-32GB** host (2× Xeon E5-2698 v4, 256 GB RAM), showing the pattern holds as GPU count doubles:
+
+| Strategy | GPUs | `split_mode` | Decode t/s | Notes |
+|---|---|---|---:|---|
+| Baseline | 1 | `none` | **684.9** | model fits in one card — fastest |
+| Pipeline (PP) | 2 | `layer` | 229.7 | layers spread across 2 GPUs |
+| Tensor (TP) | 2 | `row` | 231.3 | rows split, all-reduce per layer |
+| Pipeline (PP) | 4 | `layer` | 187.5 | more hops → slower |
+| Tensor (TP) | 4 | `row` | 191.0 | more hops → slower |
+| Pipeline (PP) | 8 | `layer` | 142.8 | 8-way split — slowest single-context |
+| Tensor (TP) | 8 | `row` | 137.1 | per-layer all-reduce across 8 cards |
+| **TP=2 × DP=4** | 8 | `row` + 4 replicas | **897** | four `row`-split replicas, run concurrently |
+| **DP=8** | 8 | 8 replicas | **2290** | eight single-GPU replicas, run concurrently |
+
 Data parallelism (DP) means running **independent processes**, each with its own model/context on its own GPU(s); throughput is the sum of the concurrent replicas' t/s. Reproduce with `inst/examples/bench_pp_tp_dp.sh <model.gguf>`.
 
 **Rule of thumb:** if the model **fits in one GPU**, use single-GPU replicas (DP) for throughput — DP=4 here is ~2.3× a single card and far ahead of any split. Reach for `split_mode = "layer"`/`"row"` only when the model is **too large for one card** (e.g. a 30B+ model on 16 GB GPUs): a split is then the only way to load it. `"layer"` minimizes cross-device copies (one activation handoff per pass); `"row"` maximizes per-token parallelism but pays a per-layer all-reduce over the ~1 GB/s host-staging link.
