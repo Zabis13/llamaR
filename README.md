@@ -198,17 +198,37 @@ hf download unsloth/Qwen3.5-9B-GGUF \
 Rscript -e "llamaR::llama_serve_anthropic('/home/user/llm_models/Qwen3.5-9B-UD-Q6_K_XL.gguf', port=11435L)"
 ```
 
-Then, in another shell, point Claude Code at it and launch:
+Then, in another shell, point Claude Code at it and launch. Rather than typing
+the model name — which silently goes stale the moment you serve a different
+GGUF — read it back from the server's `/v1/models` endpoint:
 
 ```bash
 unset ANTHROPIC_API_KEY
 export ANTHROPIC_BASE_URL=http://127.0.0.1:11435
 export ANTHROPIC_AUTH_TOKEN=sk-local
 export CLAUDE_CODE_SKIP_PREFLIGHT_CHECK=1
-export ANTHROPIC_MODEL=Qwen3.5-9B-UD-Q6_K_XL
-export ANTHROPIC_SMALL_FAST_MODEL=Qwen3.5-9B-UD-Q6_K_XL
-claude
+
+# Ask the server which model it actually loaded (sed, so no jq dependency).
+MODEL=$(curl -sS --fail --max-time 5 "$ANTHROPIC_BASE_URL/v1/models" \
+        | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -n1)
+
+# Guard: with an empty ANTHROPIC_MODEL, Claude Code quietly falls back to the
+# billed cloud model instead of your local server.
+if [ -z "$MODEL" ]; then
+  echo "Server $ANTHROPIC_BASE_URL is not up yet (a large GGUF takes minutes to load)." >&2
+else
+  export ANTHROPIC_MODEL="$MODEL"
+  # Used for cheap side-tasks (session titles); the server holds one model only.
+  export ANTHROPIC_SMALL_FAST_MODEL="$MODEL"
+  echo "Model from server: $MODEL"
+  claude
+fi
 ```
+
+Claude Code never queries the server for the model name on its own — it sends
+whatever `ANTHROPIC_MODEL` holds, and the banner shows that value. The server
+ignores the incoming `model` field and always answers with the GGUF it loaded,
+so the substitution above exists to keep the *client's* view honest.
 
 Or use the bundled launcher, which starts the server, waits for it, and runs
 Claude Code in one step:

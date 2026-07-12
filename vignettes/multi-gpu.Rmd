@@ -1,0 +1,193 @@
+---
+title: "Multi-GPU: Splits, Replicas and Benchmarking"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Multi-GPU: Splits, Replicas and Benchmarking}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE, purl=FALSE}
+# Every chunk needs a GGUF model and several GPUs, so this vignette is static:
+# the code is shown but not run at build time.
+knitr::opts_chunk$set(eval = FALSE, collapse = TRUE, comment = "#>")
+```
+
+You have more than one GPU. The intuition is that splitting a model across all
+of them makes it faster. **For inference, that intuition is wrong**, and this
+vignette explains what to do instead.
+
+```{r}
+library(llamaR)
+llama_backend_devices()   # "Vulkan0", "Vulkan1", ...
+```
+
+## 1. The one rule that matters
+
+> If the model **fits in one GPU**, run independent replicas — one per GPU.
+> Split the model **only** when it does not fit.
+
+Splitting a model does not divide the work; it *serializes* it. Each layer's
+output must reach the next layer, which lives on another card, so every token
+pays for cross-device transfers. On the Vulkan backend those transfers go
+through host RAM at roughly 1 GB/s. Meanwhile the GPUs mostly wait for each
+other: a 4-way split does not run four times faster, it runs *slower than one
+card*.
+
+Measured on 4× Tesla P100 and 4× V100 (Qwen2.5-1.5B-Instruct Q4_K_M, decode
+throughput, median of three 128-token runs):
+
+| Strategy | GPUs | `split_mode` | P100 t/s | V100 t/s |
+|---|---|---|---:|---:|
+| Baseline | 1 | `none` | 419.7 | 516.9 |
+| Pipeline (PP) | 2 | `layer` | 150.4 | 221.5 |
+| Tensor (TP) | 2 | `row` | 150.4 | 223.2 |
+| Pipeline (PP) | 4 | `layer` | 133.3 | 176.3 |
+| Tensor (TP) | 4 | `row` | 130.0 | 176.6 |
+| TP=2 × DP=2 | 4 | `row` + 2 replicas | 306 | 446 |
+| **DP=4** | 4 | 4 replicas | **975** | **1300** |
+
+Read the first and last rows together. One GPU does 419.7 t/s. Four GPUs
+*split* do 130 — worse than one. Four GPUs running *independent replicas* do
+975. The split is not a speed-up mechanism; it is a way to fit a model that
+otherwise would not load.
+
+## 2. Data parallelism: replicas
+
+DP is not an argument to `llama_load_model()`. It is **separate processes**,
+each with its own model and context, each pinned to its own GPU. Throughput is
+the sum of what the replicas deliver.
+
+Pin one replica to one card with `devices` and turn splitting off:
+
+```{r}
+model <- llama_load_model("model.gguf", n_gpu_layers = -1L,
+                          devices = "Vulkan0", split_mode = "none")
+ctx <- llama_new_context(model, n_ctx = 2048L)
+```
+
+Run several such processes concurrently — one per GPU. They share nothing, so
+there is no cross-device traffic at all. That is precisely why DP wins.
+
+Separate *processes*, not threads: Vulkan and ggml keep per-process singleton
+state, so two replicas inside one R session would fight over it.
+
+## 3. When the model does not fit: `layer` vs `row`
+
+Now the split is not a choice but a necessity — a 30B+ model will not load on a
+16 GB card. Two strategies, and the difference is how much data crosses between
+devices:
+
+- `split_mode = "layer"` (**pipeline**): layers 1–16 on GPU 0, 17–32 on GPU 1.
+  One activation handoff per forward pass.
+- `split_mode = "row"` (**tensor**): every weight matrix is cut by rows across
+  the cards. An all-reduce after *every* layer.
+
+```{r}
+# Pipeline: fewest cross-device copies
+model <- llama_load_model("big-model.gguf", n_gpu_layers = -1L,
+                          devices = c("Vulkan0", "Vulkan1"),
+                          split_mode = "layer")
+
+# Tensor: more parallelism per token, far more traffic
+model <- llama_load_model("big-model.gguf", n_gpu_layers = -1L,
+                          devices = c("Vulkan0", "Vulkan1"),
+                          split_mode = "row")
+```
+
+The benchmark above shows them within noise of each other on 2 GPUs. On a slow
+interconnect prefer `layer`: it pays the transfer once per pass instead of once
+per layer. Use `row` when the interconnect is fast, or when a single layer is
+itself too large for one card.
+
+Note the default is `split_mode = "layer"`, so on a multi-GPU host a model gets
+split **whether or not you asked**. If it fits in one card, say so explicitly:
+
+```{r}
+model <- llama_load_model("model.gguf", devices = "Vulkan0", split_mode = "none")
+```
+
+On the Vulkan backend the default split can hang. Pinning to one GPU is both
+faster and safer when the model fits.
+
+## 4. The hybrid: TP × DP
+
+With four GPUs you can run two `row`-split replicas — GPUs {0,1} and {2,3} —
+concurrently. Each replica splits a model too big for one card; the two
+replicas never talk to each other.
+
+This is the mode to reach for when the model needs two cards and you have four.
+It is worth 306 t/s on the P100 host against 130 for a plain 4-way split — but
+still far below 975 for four independent replicas, which the model was simply
+too large to allow.
+
+```{r}
+# Replica A, in its own process:
+llama_load_model("big.gguf", devices = c("Vulkan0", "Vulkan1"), split_mode = "row")
+# Replica B, in another process:
+llama_load_model("big.gguf", devices = c("Vulkan2", "Vulkan3"), split_mode = "row")
+```
+
+## 5. Measuring it yourself
+
+Do not trust the tables above for *your* model and *your* hardware. llamaR
+ships the benchmark that produced them:
+
+```{r}
+system.file("examples", "bench_pp_tp_dp.sh", package = "llamaR")
+```
+
+```bash
+# auto-detects GPU count; TP_SIZE=2 for the TPxDP row
+bash bench_pp_tp_dp.sh model.gguf
+
+# 8 GPUs as TP=4 x DP=2, 128 tokens per rep, 3 reps
+bash bench_pp_tp_dp.sh model.gguf 8 4 128 3
+```
+
+It sweeps baseline, PP and TP at 2, 4, … GPUs, then TP×DP, then pure DP —
+launching the DP replicas **concurrently** in background processes, because
+that is the only way a DP number means anything. Each config runs in its own
+process (`bench_replica.R`), which prints one parseable line:
+
+```
+RESULT dp0 devices=Vulkan0 split=none decode_tps=419.7 prefill_ms=31.2 total_ms=305.1
+```
+
+For DP rows, throughput is the **sum** of the concurrent replicas' `decode_tps`;
+single-context rows are read directly.
+
+If you are on a multi-GPU host, build ggmlR with `--enable-hard-exit`. Without
+it each of the benchmark's processes may segfault at exit — after printing its
+results, so the numbers survive, but the sweep output becomes noisy. See
+`vignette("multi-gpu", package = "ggmlR")`.
+
+## 6. Serving
+
+`llama_serve_anthropic()` takes the same `split_mode`, and the same rule
+applies — pin to one GPU unless the model does not fit:
+
+```{r}
+llama_serve_anthropic("model.gguf", port = 11435L, split_mode = "none")
+```
+
+For a model that needs several cards:
+
+```{r}
+llama_serve_anthropic("big-model.gguf", port = 11435L, split_mode = "row")
+```
+
+The server reports the model it loaded at `/v1/models`; `model_id` overrides the
+name it advertises (it defaults to the GGUF's file name). Serving several
+replicas means several servers on different ports, with a load balancer in
+front — the server process itself holds exactly one model.
+
+## 7. Summary
+
+Splitting is for **fitting**, replicas are for **throughput**. Reach for
+`split_mode` only when `llama_load_model()` on a single card runs out of VRAM,
+prefer `"layer"` over `"row"` on a slow interconnect, and always measure with
+`bench_pp_tp_dp.sh` before believing any of it.
+
+See also `vignette("getting-started")`, and `vignette("multi-gpu", package =
+"ggmlR")` for the tensor-level primitives underneath.

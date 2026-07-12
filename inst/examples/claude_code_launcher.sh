@@ -124,13 +124,14 @@ trap cleanup EXIT INT TERM
 
 echo ">> waiting for server (up to ${TIMEOUT}s; first load is slow)..."
 ready=0
+MODELS_JSON=""      # set -u: the loop below may not run if TIMEOUT is 0
 for i in $(seq 1 "$TIMEOUT"); do
   if ! kill -0 "$SRV_PID" 2>/dev/null; then
     echo "!! server died before becoming ready. Last log lines:" >&2
     grep -v "radv" "$LOG" | tail -20 >&2
     exit 1
   fi
-  if curl -s -o /dev/null --max-time 2 "${BASE}/v1/models"; then
+  if MODELS_JSON="$(curl -s --max-time 2 "${BASE}/v1/models")" && [ -n "$MODELS_JSON" ]; then
     ready=1
     echo "   ready after ${i}s"
     break
@@ -143,7 +144,11 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 
-MODEL_ID="$(basename "$MODEL" .gguf)"
+# Take the model id from the server itself (single source of truth), so the
+# name Claude Code displays is the GGUF actually loaded. Fall back to the file
+# name if the response cannot be parsed. sed, not jq: no extra dependency.
+MODEL_ID="$(printf '%s' "$MODELS_JSON" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -n1)"
+[ -n "$MODEL_ID" ] || MODEL_ID="$(basename "$MODEL" .gguf)"
 echo ">> launching Claude Code (ANTHROPIC_BASE_URL=$BASE, model=$MODEL_ID)"
 echo "   exit claude to stop the server."
 echo
